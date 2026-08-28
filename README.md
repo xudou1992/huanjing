@@ -7,9 +7,11 @@ CentOS Stream 9 专用：一条命令完成 **MySQL 8.0.31 + Redis + ODBC 驱动
 | 文件 | 说明 |
 |---|---|
 | `netinstall.sh` | 网络拉取版：从 GitHub 下载整包并自动执行安装（新服务器只需一条命令） |
-| `install.sh` | 本地一键安装/卸载脚本 |
+| `install.sh` | 本地一键安装/卸载脚本（MySQL + Redis + 三个数据库） |
+| `config.sh` | 一键修改服务端配置：写入数据库/Redis 密码与外网 IP |
+| `tlbb64/` | 天龙服务端（Server 端程序 + Public 脚本资源，GBK 编码原样保存） |
 | `mysql-packages/` | MySQL 8.0.31 RPM 包（el9）+ 三个数据库的 SQL 备份 |
-| `.gitignore` / `.gitattributes` | git 配置（忽略压缩包，脚本强制 LF 换行） |
+| `.gitignore` / `.gitattributes` | git 配置（忽略压缩包与运行时文件，tlbb64 不做换行转换） |
 
 ## 环境要求
 
@@ -49,6 +51,35 @@ chmod +x install.sh
 - **Redis 密码**：与 MySQL 分开设置。交互模式可自定义（直接回车自动生成 16 位随机密码）；`-p` 免交互模式自动生成随机密码。
 - 两个密码安装完成后保存在服务器 `/root/huanjing-credentials.txt`（权限 600，仅 root 可读），汇总面板也会显示。
 
+## 第三步：一键配置服务端
+
+环境装好后，在服务器上执行（`config.sh` 会自动定位服务端目录并读取安装时保存的密码）：
+
+```bash
+./config.sh
+```
+
+自动完成三件事：
+
+| 修改 | 文件 | 内容 |
+|---|---|---|
+| MySQL 密码 | `LoginInfo.ini` / `CenterServerInfo.ini` / `ShareMemInfo.ini` | `DBPassword=` 写入新密码 |
+| Redis 密码 | `CenterServerInfo.ini` / `ServerInfo.ini` | 仅 `[Redis]` 段的 `Password=` |
+| 外网 IP | `ServerInfo.ini` | `[Billing]` 的 `192.168.*` 占位替换为公网 IP（自动检测，可手输或跳过） |
+
+全自动免交互版：
+
+```bash
+./config.sh -d /root/tlbb64 -m MySQL密码 -r Redis密码 -i 外网IP -y
+```
+
+说明：
+
+- **按字段名定位**替换，不依赖旧密码值；`DBName`（tlbbdb_main / tlbbdb_world）与 `DBUser=root` 与本环境一致，无需修改
+- 服务端配置为 **GBK + CRLF 编码**，脚本用 perl 按字节安全替换，已做字节级校验：除目标字段外全部内容原样保留
+- 修改前自动备份 `Config` 目录到 `tlbb64/ConfigBackup_时间.tar.gz`，回滚命令在执行结束时打印
+- 改完重启服务端生效（如 `sh run.sh`）
+
 ## 安装内容（13 步全自动）
 
 1. 配置腾讯云 YUM 镜像源（原配置自动备份到 `/etc/yum.repos.d/backup/`）
@@ -62,7 +93,7 @@ chmod +x install.sh
 9. 写入 `/etc/my.cnf` SSL 配置
 10. 创建并导入 `tlbbdb_main`、`tlbbdb_world`、`web` 三个数据库
 11. 配置 `/etc/odbc.ini` 三个 ODBC 数据源
-12. 安装并配置 Redis（远程访问、密码同 MySQL root、开机自启）
+12. 安装并配置 Redis（远程访问、独立密码、开机自启）
 13. 重启 MySQL 并验证登录
 
 ## 卸载

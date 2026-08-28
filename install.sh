@@ -525,6 +525,12 @@ echo -e "  ${GREEN}✔${NC} SSH 服务       $SSH_STATUS"
 echo ""
 echo -e "  ${BLUE}ℹ${NC} 安装日志: $LOG_FILE"
 echo -e "  ${BLUE}ℹ${NC} MySQL / Redis 密码已保存: ${YELLOW}$CRED_FILE${NC}（仅 root 可读）"
+for d in "$SCRIPT_DIR/tlbb64" /root/tlbb64 /home/tlbb64; do
+    if [ -f "$d/Server/Config/ServerInfo.ini" ]; then
+        echo -e "  ${YELLOW}→${NC} 检测到服务端目录: ${YELLOW}$d${NC} — 运行 ${YELLOW}./config.sh${NC} 一键写入密码与外网IP"
+        break
+    fi
+done
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 echo -e "  ${GREEN}${BOLD}🚀 现在可以上传版本，开服！${NC}"

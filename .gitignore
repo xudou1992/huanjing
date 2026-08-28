@@ -1,3 +1,9 @@
 *.zip
 mysql-packages.tar.gz
 _check_*.py
+tlbb64/Server/Log/
+tlbb64/Server/shm
+tlbb64/Server/nohup.out
+tlbb64/logbak/
+tlbb64/ConfigBackup_*.tar.gz
+tlbb64/config_change.log

@@ -1,3 +1,5 @@
 *.sh text eol=lf
 *.sql text eol=lf
 *.md text eol=lf
+
+tlbb64/** -text
