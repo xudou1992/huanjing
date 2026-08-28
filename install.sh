@@ -21,7 +21,7 @@ BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 LOG_FILE=/var/log/huanjing-install.log
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-STEPS_TOTAL=12
+STEPS_TOTAL=13
 STEP_NO=0
 CURRENT_STEP="初始化"
 NONINTERACTIVE=0
@@ -130,21 +130,24 @@ if [ "$1" = "uninstall" ] || [ "$1" = "-u" ]; then
         info "已取消卸载操作"; exit 0
     fi
 
-    info "停止 MySQL 服务..."
+    info "停止 MySQL 与 Redis 服务..."
     systemctl stop mysqld 2>/dev/null || true
+    systemctl stop redis 2>/dev/null >>"$LOG_FILE" 2>&1 || true
     systemctl disable mysqld >>"$LOG_FILE" 2>&1 || true
+    systemctl disable redis >>"$LOG_FILE" 2>&1 || true
     ok "MySQL 服务已停止"
 
-    info "卸载 MySQL 组件..."
+    info "卸载 MySQL 与 Redis 组件..."
     dnf remove -y mysql-community-server mysql-community-client \
         mysql-community-client-plugins mysql-community-common \
         mysql-community-icu-data-files mysql-community-libs \
-        mysql-connector-odbc >>"$LOG_FILE" 2>&1 || true
-    ok "MySQL 组件已卸载"
+        mysql-connector-odbc redis >>"$LOG_FILE" 2>&1 || true
+    ok "组件已卸载"
 
     info "删除数据文件和配置..."
     rm -rf /var/lib/mysql /var/log/mysqld.log /root/mysql8 /root/.my.cnf \
-        /etc/my.cnf.rpmsave /etc/odbc.ini /etc/mysql/ssl
+        /etc/my.cnf.rpmsave /etc/odbc.ini /etc/mysql/ssl /var/lib/redis \
+        /etc/redis.conf.rpmsave
     ok "数据文件已清理"
 
     read -p "是否删除所有数据库残留？(y/N): " CLEAN_DB
@@ -201,7 +204,7 @@ else
 fi
 ok "密码设置完成"
 
-# 步骤 1/12：腾讯云镜像源
+# 步骤 1/13：腾讯云镜像源
 step_begin "配置腾讯云 YUM 镜像源"
 info "检查 yum/dnf 进程..."
 WAIT_COUNT=0
@@ -242,14 +245,14 @@ EOF
 run_opt "清理 yum 缓存" yum clean all
 run_opt "构建 yum 缓存（首次约1-2分钟）" yum makecache
 
-# 步骤 2/12：系统依赖
+# 步骤 2/13：系统依赖
 step_begin "安装系统依赖包"
 run     "安装 perl / net-tools / libaio / zip / openssl" yum install -y perl net-tools libaio zip openssl
 run_opt "移除旧版 mysql-libs" yum -y remove mysql-libs
 run_opt "安装 libnuma 依赖" yum install -y libnuma*
 ok "依赖包安装完成"
 
-# 步骤 3/12：定位安装包
+# 步骤 3/13：定位安装包
 step_begin "定位 MySQL 安装包"
 TAR_FILE=""; PKG_DIR=""
 find_packages() {
@@ -290,7 +293,7 @@ else
     exit 1
 fi
 
-# 步骤 4/12：安装 MySQL 组件
+# 步骤 4/13：安装 MySQL 组件
 step_begin "安装 MySQL 组件"
 cd "$TARGET_DIR"
 RPM_COUNT=$(ls -1 *.rpm 2>/dev/null | wc -l)
@@ -307,14 +310,14 @@ run "MySQL 8.0.31 及 ODBC 驱动安装完成" dnf install -y \
     mysql-community-server-*.rpm \
     mysql-connector-odbc-*.rpm
 
-# 步骤 5/12：启动服务
+# 步骤 5/13：启动服务
 step_begin "启动 MySQL 服务"
 run "设置开机自启" systemctl enable mysqld
 run "启动 mysqld"  systemctl start mysqld
 sleep 3
 ok "MySQL 服务已启动"
 
-# 步骤 6/12：初始密码
+# 步骤 6/13：初始密码
 step_begin "获取初始临时密码"
 TEMP_PASSWORD=$(grep 'temporary password' /var/log/mysqld.log | awk '{print $NF}')
 if [ -z "$TEMP_PASSWORD" ]; then
@@ -324,7 +327,7 @@ if [ -z "$TEMP_PASSWORD" ]; then
 fi
 info "临时密码: ${YELLOW}$TEMP_PASSWORD${NC}"
 
-# 步骤 7/12：用户权限
+# 步骤 7/13：用户权限
 step_begin "配置 MySQL 用户权限"
 mysql --connect-expired-password -uroot -p"$TEMP_PASSWORD" >>"$LOG_FILE" 2>&1 <<EOF || fail "配置 root 密码与远程权限"
 ALTER USER 'root'@'localhost' IDENTIFIED BY '$TEMP_PASSWORD';
@@ -354,7 +357,7 @@ FLUSH PRIVILEGES;
 EOF
 ok "认证插件已切换为 mysql_native_password"
 
-# 步骤 8/12：SSL 证书
+# 步骤 8/13：SSL 证书
 step_begin "生成 SSL 证书"
 OPENSSL_DIR="/etc/mysql/ssl"
 mkdir -p "$OPENSSL_DIR"
@@ -383,7 +386,7 @@ run "签发证书"      openssl x509 -req -days 365 -in "$OPENSSL_DIR/certificat
 cp "$OPENSSL_DIR/server-cert.pem" "$OPENSSL_DIR/ca.pem"
 ok "SSL 证书生成完成"
 
-# 步骤 9/12：MySQL SSL 配置
+# 步骤 9/13：MySQL SSL 配置
 step_begin "配置 MySQL SSL"
 cat >> /etc/my.cnf <<EOF
 
@@ -394,7 +397,7 @@ ssl-key = $OPENSSL_DIR/server-key.pem
 EOF
 ok "SSL 配置已写入 /etc/my.cnf"
 
-# 步骤 10/12：导入数据库
+# 步骤 10/13：导入数据库
 step_begin "导入数据库"
 for DB in tlbbdb_main tlbbdb_world web; do
     SQL_FILE="$TARGET_DIR/$DB.sql"
@@ -407,7 +410,7 @@ for DB in tlbbdb_main tlbbdb_world web; do
     fi
 done
 
-# 步骤 11/12：ODBC 数据源
+# 步骤 11/13：ODBC 数据源
 step_begin "配置 ODBC 数据源"
 cat > /etc/odbc.ini <<EOF
 [tlbbdb_main]
@@ -442,7 +445,20 @@ SOCKET          =
 EOF
 ok "三个 ODBC 数据源已写入 /etc/odbc.ini"
 
-# 步骤 12/12：重启验证
+# 步骤 12/13：Redis
+step_begin "安装配置 Redis"
+run "安装 Redis（AppStream）" dnf install -y redis
+info "配置远程访问与访问密码（密码同 MySQL root）..."
+sed -i 's/^bind .*/bind 0.0.0.0/' /etc/redis.conf
+sed -i 's/^protected-mode .*/protected-mode no/' /etc/redis.conf
+sed -i '/^requirepass /d' /etc/redis.conf
+echo "requirepass $MYSQL_ROOT_PASSWORD" >> /etc/redis.conf
+run "设置 redis 开机自启" systemctl enable redis
+run "启动 redis" systemctl restart redis
+run_sh "Redis 连接验证" "redis-cli -a '$MYSQL_ROOT_PASSWORD' --no-auth-warning ping | grep -q PONG"
+ok "Redis 配置完成（端口 6379）"
+
+# 步骤 13/13：重启验证
 step_begin "重启并验证服务"
 run "重启 mysqld" systemctl restart mysqld
 sleep 2
@@ -456,6 +472,8 @@ fi
 
 T_ELAPSED=$((SECONDS - T_START))
 T_FMT=$(printf '%d分%02d秒' $((T_ELAPSED / 60)) $((T_ELAPSED % 60)))
+REDIS_VER=$(redis-server --version 2>/dev/null | awk '{print $3}' | cut -d= -f2)
+REDIS_VER="${REDIS_VER:-6.2}"
 
 clear
 echo -e "${GREEN}"
@@ -467,6 +485,7 @@ echo -e "  ${GREEN}✔${NC} MySQL 版本     ${YELLOW}8.0.31${NC}（systemctl �
 echo -e "  ${GREEN}✔${NC} 数据库         ${YELLOW}tlbbdb_main / tlbbdb_world / web${NC}"
 echo -e "  ${GREEN}✔${NC} 远程访问       root@% 已开启，插件 mysql_native_password"
 echo -e "  ${GREEN}✔${NC} ODBC 数据源    ${YELLOW}/etc/odbc.ini${NC}"
+echo -e "  ${GREEN}✔${NC} Redis 服务     ${YELLOW}${REDIS_VER}${NC}（端口 6379，密码同 MySQL root）"
 echo -e "  ${GREEN}✔${NC} SSL 证书       ${YELLOW}/etc/mysql/ssl/${NC}"
 echo -e "  ${GREEN}✔${NC} SSH 服务       $SSH_STATUS"
 echo ""

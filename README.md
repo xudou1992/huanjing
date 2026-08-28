@@ -1,6 +1,6 @@
 # huanjing — 游戏服务器环境一键部署
 
-CentOS Stream 9 专用：一条命令完成 **MySQL 8.0.31 + ODBC 驱动 + 三个业务数据库（tlbbdb_main / tlbbdb_world / web）+ SSL + ODBC 数据源** 的全自动安装配置。
+CentOS Stream 9 专用：一条命令完成 **MySQL 8.0.31 + Redis + ODBC 驱动 + 三个业务数据库（tlbbdb_main / tlbbdb_world / web）+ SSL + ODBC 数据源** 的全自动安装配置。
 
 ## 目录结构
 
@@ -47,7 +47,7 @@ chmod +x install.sh
 - 安装包查找顺序：脚本同目录 → 当前目录 → `/home` → `/root`；`mysql-packages/` 文件夹或 `mysql-packages.tar.gz` 压缩包均可识别。
 - **密码规则**：至少 4 位；不能包含 `$` `` ` `` `"` `'` 空格、反斜杠（会破坏 SQL 配置写入）。
 
-## 安装内容（12 步全自动）
+## 安装内容（13 步全自动）
 
 1. 配置腾讯云 YUM 镜像源（原配置自动备份到 `/etc/yum.repos.d/backup/`）
 2. 安装系统依赖：perl、net-tools、libaio、zip、openssl、libnuma
@@ -60,7 +60,8 @@ chmod +x install.sh
 9. 写入 `/etc/my.cnf` SSL 配置
 10. 创建并导入 `tlbbdb_main`、`tlbbdb_world`、`web` 三个数据库
 11. 配置 `/etc/odbc.ini` 三个 ODBC 数据源
-12. 重启 MySQL 并验证登录
+12. 安装并配置 Redis（远程访问、密码同 MySQL root、开机自启）
+13. 重启 MySQL 并验证登录
 
 ## 卸载
 
@@ -77,6 +78,7 @@ cd /root/huanjing
 | 数据库 | `tlbbdb_main`（主库）、`tlbbdb_world`（世界库）、`web`（网页库） |
 | MySQL 配置 | `/etc/my.cnf` |
 | ODBC 数据源 | `/etc/odbc.ini` |
+| Redis | 端口 `6379`，`requirepass` 同 MySQL root 密码，已开启远程访问 |
 | SSL 证书 | `/etc/mysql/ssl/` |
 | 数据目录 | `/var/lib/mysql` |
 | 免密登录配置 | `/root/.my.cnf`（root 本机执行 mysql 不再需要输密码） |
@@ -90,6 +92,8 @@ systemctl restart mysqld       # 重启
 mysql -uroot -p                # 登录 MySQL
 mysql -uroot -p -e "SHOW DATABASES;"
 cat /etc/odbc.ini              # 查看 ODBC 配置
+systemctl status redis         # 查看 Redis 状态
+redis-cli -a 你的密码 ping     # Redis 连通测试（返回 PONG）
 ```
 
 ## 常见问题
