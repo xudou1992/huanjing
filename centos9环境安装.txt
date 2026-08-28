@@ -1,0 +1,123 @@
+╔═══════════════════════════════════════════════════════════╗
+║                                                           ║
+║        MySQL 8.0.31 自动化安装脚本使用说明                ║
+║        适用于 CentOS 9 Stream                             ║
+║                                                           ║
+╚═══════════════════════════════════════════════════════════╝
+
+【安装步骤】
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. 上传文件到服务器 /home 目录：
+   • ydinstall.sh
+   • ydindd.sh
+   • mysql-packages.tar.gz
+
+2. 执行安装命令：
+   cd /home && chmod +x ydinstall.sh && ./ydinstall.sh
+
+3. 按提示输入 MySQL root 密码（至少4位）
+
+4. 等待安装完成（约5-10分钟）
+
+
+【卸载步骤】
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⚠️  如果安装过程失败，运行下面的卸载命令：
+
+cd /home && chmod +x ydindd.sh && ./ydindd.sh
+
+
+【安装内容】
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✓ MySQL 8.0.31 服务器
+✓ MySQL ODBC 驱动
+✓ 三个数据库：
+  • tlbbdb_main  - 主数据库
+  • tlbbdb_world - 世界数据库
+  • web          - Web数据库
+✓ ODBC 数据源配置
+✓ SSL 证书配置
+✓ 腾讯云 YUM 镜像源（加速下载）
+
+
+【新特性】
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✓ 使用腾讯云镜像源，下载速度更快
+✓ 彩色输出，安装进度一目了然
+✓ 自动检查 OpenSSL，避免 SSH 登录问题
+✓ 完整的错误处理和进度提示
+✓ 安装完成后自动清理临时文件
+
+
+【重要提示】SSH 登录问题解决方案
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+如果安装后 SSH 无法登录（极少数情况）：
+
+原因：OpenSSL 版本与 SSH 服务版本不匹配
+
+解决方法（通过 VNC 控制台登录）：
+
+1. 检查版本冲突：
+   openssl version
+   ssh -V
+
+2. 方案一：降级 OpenSSL（推荐）
+   yum downgrade openssl
+   yum downgrade openssl
+   yum downgrade openssl
+   systemctl restart sshd
+
+3. 方案二：升级 SSH 服务
+   yum install openssh-server -y
+   systemctl restart sshd
+
+4. 验证服务状态：
+   systemctl status sshd
+
+注意：最新版脚本已优化，会自动检查 OpenSSL 避免此问题。
+
+
+【配置文件位置】
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+• MySQL 配置：/etc/my.cnf
+• ODBC 配置：/etc/odbc.ini
+• SSL 证书：/etc/mysql/ssl/
+• 数据目录：/var/lib/mysql
+• 日志文件：/var/log/mysqld.log
+
+
+【常用命令】
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# 查看 MySQL 状态
+systemctl status mysqld
+
+# 重启 MySQL 服务
+systemctl restart mysqld
+
+# 登录 MySQL
+mysql -uroot -p
+
+# 查看数据库列表
+mysql -uroot -p -e "SHOW DATABASES;"
+
+# 查看 ODBC 配置
+cat /etc/odbc.ini
+
+
+【技术支持】
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+如有问题，请检查：
+1. 系统是否为 CentOS 9 Stream
+2. 网络连接是否正常
+3. /home 目录是否有足够空间（至少 2GB）
+4. 是否有 root 权限
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
