@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================================
-#  一键环境安装脚本（MySQL 8.0.31 @ CentOS Stream 9）
+#  游戏服务器环境一键安装脚本（MySQL 8.0.31 @ CentOS Stream 9）
 #
 #  用法:
 #    ./install.sh                # 一键安装（交互式输入 MySQL root 密码）
@@ -11,162 +11,212 @@
 #    - 自动在脚本所在目录 / 当前目录 / /home / /root 下查找 mysql-packages/
 #      文件夹或 mysql-packages.tar.gz 压缩包
 #    - 安装内容: MySQL 8.0.31 + ODBC 驱动 + 三个数据库 + SSL 证书 + ODBC 数据源
+#    - 详细日志: /var/log/huanjing-install.log
 # ============================================================================
 set -e
 
-# ---------------------------- 颜色与输出 ------------------------------------
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+# ---------------------------- 全局定义 --------------------------------------
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
-print_info()    { echo -e "${BLUE}[信息]${NC} $1"; }
-print_success() { echo -e "${GREEN}[成功]${NC} $1"; }
-print_warning() { echo -e "${YELLOW}[警告]${NC} $1"; }
-print_error()   { echo -e "${RED}[错误]${NC} $1"; }
-print_step()    { echo -e "\n${GREEN}========================================${NC}"; \
-                  echo -e "${GREEN}  $1${NC}"; \
-                  echo -e "${GREEN}========================================${NC}\n"; }
-
+LOG_FILE=/var/log/huanjing-install.log
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+STEPS_TOTAL=12
+STEP_NO=0
 CURRENT_STEP="初始化"
-trap 'print_error "安装在第 $CURRENT_STEP 阶段失败，可运行 ./install.sh uninstall 清理后重试"; exit 1' ERR
+NONINTERACTIVE=0
+T_START=$SECONDS
+: > "$LOG_FILE"
+
+# ---------------------------- 输出助手 --------------------------------------
+info()    { echo -e "  ${BLUE}ℹ${NC} $1"; }
+ok()      { echo -e "  ${GREEN}✔${NC} $1"; }
+warn()    { echo -e "  ${YELLOW}⚠${NC} $1"; }
+err()     { echo -e "${RED}✖ $1${NC}"; }
+
+make_bar() {  # make_bar <已填充格数> <总格数>
+    local filled=$1 len=$2 out="" i
+    for ((i = 0; i < filled; i++)); do out+="█"; done
+    for ((i = filled; i < len; i++)); do out+="░"; done
+    printf '%s' "$out"
+}
+
+step_begin() {  # step_begin <步骤标题>
+    local title="$1"
+    CURRENT_STEP="$title"
+    STEP_NO=$((STEP_NO + 1))
+    local pct=$((STEP_NO * 100 / STEPS_TOTAL))
+    local bar
+    bar=$(make_bar $((STEP_NO * 30 / STEPS_TOTAL)) 30)
+    echo ""
+    echo -e "${CYAN}${BOLD}▸ [$STEP_NO/$STEPS_TOTAL] $title${NC}  ${BLUE}$bar $pct%${NC}"
+}
+
+fail() {  # fail <描述> —— 打印阶段与日志尾部后退出
+    echo
+    err "$1（阶段: $CURRENT_STEP）"
+    echo -e "  ${BLUE}ℹ${NC} 日志末尾 20 行:"
+    tail -20 "$LOG_FILE" 2>/dev/null | sed 's/^/      /' || true
+    echo -e "  ${BLUE}ℹ${NC} 完整日志: $LOG_FILE"
+    exit 1
+}
+trap 'rc=$?; fail "命令执行出错（退出码 $rc）"' ERR
+
+run()      {  # run <描述> <命令...> —— 静默执行，失败即退出
+    local desc="$1"; shift
+    if ! "$@" >>"$LOG_FILE" 2>&1; then fail "$desc"; fi
+    ok "$desc"
+}
+run_sh()   {  # run_sh <描述> <shell 片段>
+    local desc="$1" script="$2"
+    if ! bash -c "$script" >>"$LOG_FILE" 2>&1; then fail "$desc"; fi
+    ok "$desc"
+}
+run_opt()  {  # run_opt <描述> <命令...> —— 尽力执行，失败不中断
+    local desc="$1"; shift
+    info "$desc ..."
+    "$@" >>"$LOG_FILE" 2>&1 || true
+}
 
 # ---------------------------- 前置检查 --------------------------------------
 if [ "$(id -u)" -ne 0 ]; then
-    print_error "请使用 root 用户运行: sudo ./install.sh"
+    err "请使用 root 用户运行: sudo ./install.sh"
     exit 1
 fi
 
-SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-
 if ! grep -qi "CentOS Stream 9\|CentOS Stream release 9" /etc/os-release 2>/dev/null; then
-    print_warning "当前系统不是 CentOS Stream 9，脚本可能不兼容（继续执行）"
-    grep PRETTY /etc/os-release 2>/dev/null || true
+    echo -e "${YELLOW}⚠ 当前系统不是 CentOS Stream 9，脚本可能不兼容（将继续执行）${NC}"
+    grep PRETTY /etc/os-release 2>/dev/null | sed 's/^/    /' || true
 fi
 
-# ---------------------------- 定位安装包 ------------------------------------
-find_packages() {
-    for d in "$SCRIPT_DIR/mysql-packages" "$PWD/mysql-packages" /home/mysql-packages /root/mysql8; do
-        if [ -d "$d" ] && ls "$d"/*.rpm >/dev/null 2>&1; then
-            PKG_DIR="$d"; return 0
+clear
+echo -e "${CYAN}"
+echo  "╔══════════════════════════════════════════════╗"
+echo -e "║   ${BOLD}🚀 游戏服务器环境 · 一键部署${NC}${CYAN}"
+echo -e "║   MySQL 8.0.31 · CentOS Stream 9"
+echo  "╚══════════════════════════════════════════════╝"
+echo -e "${NC}"
+
+# 已安装检测与磁盘检查（卸载模式跳过；非交互模式下直接报错退出）
+if [ "$1" != "uninstall" ] && [ "$1" != "-u" ]; then
+    if command -v mysql >/dev/null 2>&1 || systemctl list-unit-files 2>/dev/null | grep -q "^mysqld"; then
+        warn "检测到本机已安装 MySQL"
+        if [ "$1" = "-p" ]; then
+            err "非交互模式无法确认，请先执行 ./install.sh uninstall 后重装"
+            exit 1
         fi
-    done
-    for f in "$SCRIPT_DIR/mysql-packages.tar.gz" "$PWD/mysql-packages.tar.gz" /home/mysql-packages.tar.gz; do
-        if [ -f "$f" ]; then
-            TAR_FILE="$f"; return 0
-        fi
-    done
-    return 1
-}
+        read -p "  继续安装可能造成冲突，仍要继续吗？(y/N): " GO_ON
+        [[ $GO_ON =~ [Yy] ]] || { info "已退出，建议先执行 ./install.sh uninstall"; exit 0; }
+    fi
+
+    AVAIL_KB=$(df -Pk / | awk 'NR==2 {print $4}')
+    if [ "${AVAIL_KB:-0}" -lt $((2 * 1024 * 1024)) ]; then
+        warn "根分区剩余空间不足 2GB（当前约 $((AVAIL_KB / 1024 / 1024))GB），安装可能失败"
+    fi
+fi
 
 # ---------------------------- 卸载模式 --------------------------------------
 if [ "$1" = "uninstall" ] || [ "$1" = "-u" ]; then
     CURRENT_STEP="卸载"
-    clear
+    trap - ERR
     echo -e "${RED}"
-    cat << "EOF"
-╔═══════════════════════════════════════════╗
-║          MySQL 一键卸载                   ║
-║          ⚠️  警告：此操作不可逆！         ║
-╚═══════════════════════════════════════════╝
-EOF
+    echo  "╔══════════════════════════════════════════════╗"
+    echo -e "║   ${BOLD}⚠ MySQL 一键卸载 · 此操作不可逆${NC}${RED}"
+    echo  "╚══════════════════════════════════════════════╝"
     echo -e "${NC}"
 
     read -p "确认要卸载 MySQL 吗？(输入 YES 继续): " CONFIRM
     if [ "$CONFIRM" != "YES" ]; then
-        print_info "已取消卸载操作"; exit 0
+        info "已取消卸载操作"; exit 0
     fi
 
-    print_info "停止 MySQL 服务..."
+    info "停止 MySQL 服务..."
     systemctl stop mysqld 2>/dev/null || true
-    systemctl disable mysqld 2>/dev/null || true
+    systemctl disable mysqld >>"$LOG_FILE" 2>&1 || true
+    ok "MySQL 服务已停止"
 
-    print_info "卸载 MySQL 组件..."
+    info "卸载 MySQL 组件..."
     dnf remove -y mysql-community-server mysql-community-client \
         mysql-community-client-plugins mysql-community-common \
         mysql-community-icu-data-files mysql-community-libs \
-        mysql-connector-odbc 2>/dev/null || true
+        mysql-connector-odbc >>"$LOG_FILE" 2>&1 || true
+    ok "MySQL 组件已卸载"
 
-    print_info "删除数据文件和配置..."
+    info "删除数据文件和配置..."
     rm -rf /var/lib/mysql /var/log/mysqld.log /root/mysql8 /root/.my.cnf \
         /etc/my.cnf.rpmsave /etc/odbc.ini /etc/mysql/ssl
+    ok "数据文件已清理"
 
-    read -p "是否删除所有数据库备份残留？(y/N): " CLEAN_DB
+    read -p "是否删除所有数据库残留？(y/N): " CLEAN_DB
     if [[ $CLEAN_DB =~ [Yy] ]]; then
-        read -s -p "请输入 MySQL root 密码: " DB_PWD; echo
-        mysql -uroot -p"$DB_PWD" -e "DROP DATABASE IF EXISTS tlbbdb_main; DROP DATABASE IF EXISTS tlbbdb_world; DROP DATABASE IF EXISTS web;" 2>/dev/null || true
+        read -s -p "  请输入 MySQL root 密码: " DB_PWD; echo
+        mysql -uroot -p"$DB_PWD" -e "DROP DATABASE IF EXISTS tlbbdb_main; \
+DROP DATABASE IF EXISTS tlbbdb_world; DROP DATABASE IF EXISTS web;" >>"$LOG_FILE" 2>&1 || true
+        ok "数据库已删除"
     fi
 
-    print_info "清理残留依赖..."
-    dnf autoremove -y
+    info "清理残留依赖..."
+    dnf autoremove -y >>"$LOG_FILE" 2>&1 || true
 
-    print_info "恢复原有 yum 源配置..."
+    info "恢复原有 yum 源配置..."
     if [ -d /etc/yum.repos.d/backup ]; then
         mv /etc/yum.repos.d/backup/*.repo /etc/yum.repos.d/ 2>/dev/null || true
         rmdir /etc/yum.repos.d/backup 2>/dev/null || true
     fi
+    ok "yum 源已恢复"
 
     echo ""
-    print_success "MySQL 已完全卸载"
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    ok "MySQL 已完全卸载"
     exit 0
 fi
 
 # ---------------------------- 安装模式 --------------------------------------
-clear
-echo -e "${BLUE}"
-cat << "EOF"
-╔═══════════════════════════════════════════╗
-║                                           ║
-║     一键环境安装 · MySQL 8.0.31           ║
-║     CentOS 9 Stream 专用版本              ║
-║                                           ║
-╚═══════════════════════════════════════════╝
-EOF
-echo -e "${NC}"
-
-# 密码: -p 参数 或 交互输入（两次确认，禁止 shell 特殊字符）
+# 密码: -p 参数（免交互）或交互输入；禁止会破坏 SQL/heredoc 的字符
+BAD_CHARS='[$`"'"'"'\\ ]'
 if [ "$1" = "-p" ] && [ -n "$2" ]; then
+    NONINTERACTIVE=1
     MYSQL_ROOT_PASSWORD="$2"
+    if [ ${#MYSQL_ROOT_PASSWORD} -lt 4 ]; then
+        err "密码长度不足，请输入至少4位字符"; exit 1
+    fi
+    if [[ "$MYSQL_ROOT_PASSWORD" =~ $BAD_CHARS ]]; then
+        err "密码不能包含 \$ \` \" ' 空格或反斜杠"; exit 1
+    fi
 else
     while true; do
         read -s -p "请输入 MySQL root 密码（至少4位）: " MYSQL_ROOT_PASSWORD; echo
         read -s -p "请再次输入确认: " MYSQL_ROOT_PASSWORD2; echo
-        [ "$MYSQL_ROOT_PASSWORD" != "$MYSQL_ROOT_PASSWORD2" ] && { print_error "两次输入不一致，请重新输入"; continue; }
-        if [ ${#MYSQL_ROOT_PASSWORD} -lt 4 ]; then
-            print_error "密码长度不足，请输入至少4位字符"; continue
+        if [ "$MYSQL_ROOT_PASSWORD" != "$MYSQL_ROOT_PASSWORD2" ]; then
+            warn "两次输入不一致，请重新输入"; continue
         fi
         if [ ${#MYSQL_ROOT_PASSWORD} -lt 4 ]; then
-            print_error "密码长度不足，请输入至少4位字符"; continue
+            warn "密码长度不足，请输入至少4位字符"; continue
         fi
-        # 禁止会破坏 SQL/heredoc 的 shell 特殊字符
-        BAD_CHARS='[$`"'"'"'\\ ]'
         if [[ "$MYSQL_ROOT_PASSWORD" =~ $BAD_CHARS ]]; then
-            print_error "密码不能包含 \$ \` \" ' 空格或反斜杠，请重新输入"; continue
+            warn "密码不能包含 \$ \` \" ' 空格或反斜杠，请重新输入"; continue
         fi
         break
     done
 fi
-print_success "密码设置完成"
+ok "密码设置完成"
 
-# 步骤1/12：腾讯云镜像源
-CURRENT_STEP="配置 YUM 镜像源"
-print_step "步骤 1/12: 配置腾讯云 YUM 镜像源"
-print_info "检查 yum/dnf 进程..."
+# 步骤 1/12：腾讯云镜像源
+step_begin "配置腾讯云 YUM 镜像源"
+info "检查 yum/dnf 进程..."
 WAIT_COUNT=0
 while pgrep -x yum >/dev/null 2>&1 || pgrep -x dnf >/dev/null 2>&1; do
-    [ $WAIT_COUNT -eq 0 ] && print_warning "检测到其他 yum/dnf 进程正在运行，等待完成..."
+    [ $WAIT_COUNT -eq 0 ] && warn "检测到其他 yum/dnf 进程正在运行，等待完成..."
     sleep 5; WAIT_COUNT=$((WAIT_COUNT + 1))
     if [ $WAIT_COUNT -gt 60 ]; then
-        print_warning "等待超时，尝试强制终止..."
+        warn "等待超时，尝试强制终止..."
         pkill -9 yum 2>/dev/null || true; pkill -9 dnf 2>/dev/null || true; sleep 2; break
     fi
 done
 
-print_info "备份原有 yum 源配置..."
+info "备份原有 yum 源并写入腾讯云镜像配置..."
 mkdir -p /etc/yum.repos.d/backup
 mv /etc/yum.repos.d/*.repo /etc/yum.repos.d/backup/ 2>/dev/null || true
-
 cat > /etc/yum.repos.d/CentOS-Base.repo << 'EOF'
 [baseos]
 name=CentOS Stream $releasever - BaseOS - mirrors.tencent.com
@@ -189,35 +239,41 @@ gpgcheck=1
 enabled=1
 gpgkey=https://mirrors.tencent.com/centos-stream/RPM-GPG-KEY-CentOS-Official
 EOF
+run_opt "清理 yum 缓存" yum clean all
+run_opt "构建 yum 缓存（首次约1-2分钟）" yum makecache
 
-yum clean all 2>/dev/null || true
-print_info "正在构建缓存（首次可能需要1-2分钟）..."
-yum makecache >/dev/null 2>&1 || true
-print_success "腾讯云镜像源配置完成"
+# 步骤 2/12：系统依赖
+step_begin "安装系统依赖包"
+run     "安装 perl / net-tools / libaio / zip / openssl" yum install -y perl net-tools libaio zip openssl
+run_opt "移除旧版 mysql-libs" yum -y remove mysql-libs
+run_opt "安装 libnuma 依赖" yum install -y libnuma*
+ok "依赖包安装完成"
 
-# 步骤2/12：安装依赖
-CURRENT_STEP="安装系统依赖"
-print_step "步骤 2/12: 安装系统依赖包"
-yum install -y perl net-tools libaio zip openssl
-yum -y remove mysql-libs 2>/dev/null || true
-yum install -y libnuma* 2>/dev/null || true
-print_success "依赖包安装完成"
-
-# 步骤3/12：定位/解压安装包
-CURRENT_STEP="定位 MySQL 安装包"
-print_step "步骤 3/12: 定位 MySQL 安装包"
-TAR_FILE=""
-PKG_DIR=""
+# 步骤 3/12：定位安装包
+step_begin "定位 MySQL 安装包"
+TAR_FILE=""; PKG_DIR=""
+find_packages() {
+    for d in "$SCRIPT_DIR/mysql-packages" "$PWD/mysql-packages" /home/mysql-packages /root/mysql8; do
+        if [ -d "$d" ] && ls "$d"/*.rpm >/dev/null 2>&1; then
+            PKG_DIR="$d"; return 0
+        fi
+    done
+    for f in "$SCRIPT_DIR/mysql-packages.tar.gz" "$PWD/mysql-packages.tar.gz" /home/mysql-packages.tar.gz; do
+        if [ -f "$f" ]; then
+            TAR_FILE="$f"; return 0
+        fi
+    done
+    return 1
+}
 if find_packages; then
     if [ -n "$PKG_DIR" ]; then
-        print_success "已找到安装包目录: $PKG_DIR"
+        ok "已找到安装包目录: $PKG_DIR"
         TARGET_DIR="$PKG_DIR"
     else
         TARGET_DIR="/root/mysql8"
-        print_info "找到压缩包 $TAR_FILE，正在解压到 $TARGET_DIR ..."
+        info "找到压缩包 $TAR_FILE，解压到 $TARGET_DIR ..."
         rm -rf "$TARGET_DIR"; mkdir -p "$TARGET_DIR"
         tar -xzf "$TAR_FILE" -C "$TARGET_DIR" --strip-components=1 2>/dev/null || tar -xzf "$TAR_FILE" -C "$TARGET_DIR"
-        # 若解压出嵌套目录则展开
         if ! ls "$TARGET_DIR"/*.rpm >/dev/null 2>&1; then
             SUB=$(find "$TARGET_DIR" -maxdepth 2 -name "*.rpm" | head -1 | xargs -r dirname)
             if [ -n "$SUB" ] && [ "$SUB" != "$TARGET_DIR" ]; then
@@ -226,24 +282,23 @@ if find_packages; then
                 rm -rf "$SUB"
             fi
         fi
-        print_success "解压完成"
+        ok "解压完成"
     fi
 else
-    print_error "未找到 mysql-packages/ 目录或 mysql-packages.tar.gz"
-    print_info "请将 mysql-packages 文件夹（或压缩包）放在 install.sh 同目录后重试"
+    err "未找到 mysql-packages/ 目录或 mysql-packages.tar.gz"
+    info "请将 mysql-packages 文件夹（或压缩包）放在 install.sh 同目录后重试"
     exit 1
 fi
 
-# 步骤4/12：安装 MySQL RPM
-CURRENT_STEP="安装 MySQL 组件"
-print_step "步骤 4/12: 安装 MySQL 组件"
+# 步骤 4/12：安装 MySQL 组件
+step_begin "安装 MySQL 组件"
 cd "$TARGET_DIR"
 RPM_COUNT=$(ls -1 *.rpm 2>/dev/null | wc -l)
 if [ "$RPM_COUNT" -eq 0 ]; then
-    print_error "未找到 RPM 文件"; ls -la "$TARGET_DIR"; exit 1
+    err "未找到 RPM 文件"; ls -la "$TARGET_DIR"; exit 1
 fi
-print_info "找到 $RPM_COUNT 个 RPM 包，按依赖顺序安装..."
-dnf install -y \
+info "找到 $RPM_COUNT 个 RPM 包，按依赖顺序安装（输出已写入日志）..."
+run "MySQL 8.0.31 及 ODBC 驱动安装完成" dnf install -y \
     mysql-community-common-*.rpm \
     mysql-community-libs-*.rpm \
     mysql-community-client-plugins-*.rpm \
@@ -251,30 +306,27 @@ dnf install -y \
     mysql-community-client-*.rpm \
     mysql-community-server-*.rpm \
     mysql-connector-odbc-*.rpm
-print_success "MySQL 组件安装完成"
 
-# 步骤5/12：启动服务
-CURRENT_STEP="启动 MySQL 服务"
-print_step "步骤 5/12: 启动 MySQL 服务"
-systemctl enable mysqld
-systemctl start mysqld
+# 步骤 5/12：启动服务
+step_begin "启动 MySQL 服务"
+run "设置开机自启" systemctl enable mysqld
+run "启动 mysqld"  systemctl start mysqld
 sleep 3
-print_success "MySQL 服务已启动"
+ok "MySQL 服务已启动"
 
-# 步骤6/12：获取临时密码
-CURRENT_STEP="获取初始密码"
-print_step "步骤 6/12: 获取初始临时密码"
+# 步骤 6/12：初始密码
+step_begin "获取初始临时密码"
 TEMP_PASSWORD=$(grep 'temporary password' /var/log/mysqld.log | awk '{print $NF}')
 if [ -z "$TEMP_PASSWORD" ]; then
-    print_error "未在 /var/log/mysqld.log 中找到临时密码，请检查 MySQL 启动状态"
+    err "未在 /var/log/mysqld.log 中找到临时密码"
+    tail -20 /var/log/mysqld.log 2>/dev/null || true
     exit 1
 fi
-print_info "临时密码: ${YELLOW}$TEMP_PASSWORD${NC}"
+info "临时密码: ${YELLOW}$TEMP_PASSWORD${NC}"
 
-# 步骤7/12：配置 root 密码与远程权限
-CURRENT_STEP="配置 MySQL 用户权限"
-print_step "步骤 7/12: 配置 MySQL 用户权限"
-mysql --connect-expired-password -uroot -p"$TEMP_PASSWORD" <<EOF
+# 步骤 7/12：用户权限
+step_begin "配置 MySQL 用户权限"
+mysql --connect-expired-password -uroot -p"$TEMP_PASSWORD" >>"$LOG_FILE" 2>&1 <<EOF || fail "配置 root 密码与远程权限"
 ALTER USER 'root'@'localhost' IDENTIFIED BY '$TEMP_PASSWORD';
 FLUSH PRIVILEGES;
 SET GLOBAL validate_password.policy = 0;
@@ -284,8 +336,8 @@ CREATE USER 'root'@'%' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
 GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
 FLUSH PRIVILEGES;
 EOF
+ok "root 密码与远程权限（root@%）配置完成"
 
-print_info "创建 /root/.my.cnf 免密登录配置..."
 cat > /root/.my.cnf <<EOF
 [client]
 user = root
@@ -293,69 +345,70 @@ password = $MYSQL_ROOT_PASSWORD
 host = localhost
 EOF
 chmod 600 /root/.my.cnf
+ok "已创建 /root/.my.cnf 免密登录配置"
 
-print_info "修改认证插件为 mysql_native_password..."
-mysql --defaults-file=/root/.my.cnf <<EOF
+mysql --defaults-file=/root/.my.cnf >>"$LOG_FILE" 2>&1 <<EOF || fail "切换认证插件"
 ALTER USER 'root'@'%' IDENTIFIED WITH mysql_native_password BY '$MYSQL_ROOT_PASSWORD';
 ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '$MYSQL_ROOT_PASSWORD';
 FLUSH PRIVILEGES;
 EOF
-print_success "用户权限配置完成"
+ok "认证插件已切换为 mysql_native_password"
 
-# 步骤8/12：生成 SSL 证书
-CURRENT_STEP="生成 SSL 证书"
-print_step "步骤 8/12: 生成 SSL 证书"
+# 步骤 8/12：SSL 证书
+step_begin "生成 SSL 证书"
 OPENSSL_DIR="/etc/mysql/ssl"
 mkdir -p "$OPENSSL_DIR"
 if ! command -v openssl >/dev/null 2>&1; then
-    print_warning "OpenSSL 未安装，正在安装（不升级现有版本）..."
-    yum install -y openssl --setopt=obsoletes=0
+    warn "OpenSSL 未安装，正在安装（不升级现有版本）..."
+    run "安装 OpenSSL" yum install -y openssl --setopt=obsoletes=0
 else
-    print_info "OpenSSL 已安装（$(openssl version 2>/dev/null)），跳过"
+    ok "OpenSSL 已存在（$(openssl version 2>/dev/null)），跳过安装"
 fi
 if ! systemctl is-active --quiet sshd; then
-    print_warning "SSH 服务异常，尝试修复（防止 OpenSSL/SSH 版本冲突）..."
+    warn "SSH 服务异常，尝试修复（防止 OpenSSL/SSH 版本冲突）..."
     systemctl restart sshd 2>/dev/null || {
-        for i in 1 2 3; do yum downgrade openssl -y 2>/dev/null && break || true; done
-        systemctl restart sshd 2>/dev/null || { yum install -y openssh-server; systemctl restart sshd; }
+        for i in 1 2 3; do yum downgrade openssl -y >>"$LOG_FILE" 2>&1 && break || true; done
+        systemctl restart sshd 2>/dev/null || {
+            run_opt "安装 openssh-server" yum install -y openssh-server
+            systemctl restart sshd 2>/dev/null || true
+        }
     }
+    systemctl is-active --quiet sshd && ok "SSH 服务已修复" || warn "SSH 仍未正常，请通过 VNC 检查"
+else
+    ok "SSH 服务运行正常"
 fi
-print_info "生成 RSA 私钥与证书..."
-openssl genpkey -algorithm RSA -out "$OPENSSL_DIR/server-key.pem"
-openssl req -new -key "$OPENSSL_DIR/server-key.pem" -out "$OPENSSL_DIR/certificate_request.csr" -subj "/CN=mysql-server"
-openssl x509 -req -days 365 -in "$OPENSSL_DIR/certificate_request.csr" -signkey "$OPENSSL_DIR/server-key.pem" -out "$OPENSSL_DIR/server-cert.pem"
+run "生成 RSA 私钥" openssl genpkey -algorithm RSA -out "$OPENSSL_DIR/server-key.pem"
+run "生成证书请求"  openssl req -new -key "$OPENSSL_DIR/server-key.pem" -out "$OPENSSL_DIR/certificate_request.csr" -subj "/CN=mysql-server"
+run "签发证书"      openssl x509 -req -days 365 -in "$OPENSSL_DIR/certificate_request.csr" -signkey "$OPENSSL_DIR/server-key.pem" -out "$OPENSSL_DIR/server-cert.pem"
 cp "$OPENSSL_DIR/server-cert.pem" "$OPENSSL_DIR/ca.pem"
-print_success "SSL 证书生成完成"
+ok "SSL 证书生成完成"
 
-# 步骤9/12：配置 MySQL SSL
-CURRENT_STEP="配置 MySQL SSL"
-print_step "步骤 9/12: 配置 MySQL SSL"
+# 步骤 9/12：MySQL SSL 配置
+step_begin "配置 MySQL SSL"
 cat >> /etc/my.cnf <<EOF
+
 [mysqld]
 ssl-ca = $OPENSSL_DIR/ca.pem
 ssl-cert = $OPENSSL_DIR/server-cert.pem
 ssl-key = $OPENSSL_DIR/server-key.pem
 EOF
-print_success "SSL 配置完成"
+ok "SSL 配置已写入 /etc/my.cnf"
 
-# 步骤10/12：导入数据库
-CURRENT_STEP="导入数据库"
-print_step "步骤 10/12: 导入数据库"
+# 步骤 10/12：导入数据库
+step_begin "导入数据库"
 for DB in tlbbdb_main tlbbdb_world web; do
-    print_info "创建并导入数据库 $DB ..."
-    mysql --defaults-file=/root/.my.cnf -e "CREATE DATABASE IF NOT EXISTS $DB"
     SQL_FILE="$TARGET_DIR/$DB.sql"
     if [ -f "$SQL_FILE" ]; then
-        mysql --defaults-file=/root/.my.cnf "$DB" < "$SQL_FILE"
-        print_success "$DB 导入完成"
+        run "创建数据库 $DB" mysql --defaults-file=/root/.my.cnf -e "CREATE DATABASE IF NOT EXISTS $DB"
+        info "导入 $DB.sql（大文件可能需要几分钟）..."
+        run "导入 $DB 完成" bash -c "mysql --defaults-file=/root/.my.cnf '$DB' < '$SQL_FILE'"
     else
-        print_warning "未找到 $SQL_FILE，跳过 $DB"
+        warn "未找到 $SQL_FILE，跳过 $DB"
     fi
 done
 
-# 步骤11/12：配置 ODBC
-CURRENT_STEP="配置 ODBC 数据源"
-print_step "步骤 11/12: 配置 ODBC 数据源"
+# 步骤 11/12：ODBC 数据源
+step_begin "配置 ODBC 数据源"
 cat > /etc/odbc.ini <<EOF
 [tlbbdb_main]
 Driver          = /usr/lib64/libmyodbc8a.so
@@ -387,39 +440,38 @@ Database        = web
 OPTION          = 3
 SOCKET          =
 EOF
-print_success "ODBC 配置完成"
+ok "三个 ODBC 数据源已写入 /etc/odbc.ini"
 
-# 步骤12/12：重启并验证
-CURRENT_STEP="重启并验证服务"
-print_step "步骤 12/12: 重启并验证服务"
-systemctl restart mysqld
+# 步骤 12/12：重启验证
+step_begin "重启并验证服务"
+run "重启 mysqld" systemctl restart mysqld
 sleep 2
-mysql --defaults-file=/root/.my.cnf -e "SHOW DATABASES;" && print_success "MySQL 登录验证通过"
-
+run_sh "MySQL 登录验证" "mysql --defaults-file=/root/.my.cnf -e 'SHOW DATABASES;'"
 trap - ERR
 if systemctl is-active --quiet sshd; then
-    SSH_STATUS="${GREEN}✓ 正常运行${NC}"
+    SSH_STATUS="${GREEN}✔ 正常运行${NC}"
 else
-    SSH_STATUS="${RED}✗ 服务异常（请通过 VNC 检查）${NC}"
+    SSH_STATUS="${RED}✖ 异常（请通过 VNC 检查）${NC}"
 fi
+
+T_ELAPSED=$((SECONDS - T_START))
+T_FMT=$(printf '%d分%02d秒' $((T_ELAPSED / 60)) $((T_ELAPSED % 60)))
 
 clear
 echo -e "${GREEN}"
-cat << "EOF"
-╔═══════════════════════════════════════════╗
-║                                           ║
-║          安装成功完成！                   ║
-║                                           ║
-╚═══════════════════════════════════════════╝
-EOF
+echo  "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo -e "  ${BOLD}🎉 安装成功完成！${NC}${GREEN}   总耗时: $T_FMT"
+echo  "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo -e "${NC}"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}✓${NC} MySQL 版本: ${YELLOW}8.0.31${NC}"
-echo -e "${GREEN}✓${NC} 数据库列表: ${YELLOW}tlbbdb_main / tlbbdb_world / web${NC}"
-echo -e "${GREEN}✓${NC} ODBC 配置: ${YELLOW}/etc/odbc.ini${NC}"
-echo -e "${GREEN}✓${NC} SSL 证书:  ${YELLOW}/etc/mysql/ssl/${NC}"
-echo -e "${GREEN}✓${NC} SSH 服务: $SSH_STATUS"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "  ${GREEN}✔${NC} MySQL 版本     ${YELLOW}8.0.31${NC}（systemctl 管理，开机自启）"
+echo -e "  ${GREEN}✔${NC} 数据库         ${YELLOW}tlbbdb_main / tlbbdb_world / web${NC}"
+echo -e "  ${GREEN}✔${NC} 远程访问       root@% 已开启，插件 mysql_native_password"
+echo -e "  ${GREEN}✔${NC} ODBC 数据源    ${YELLOW}/etc/odbc.ini${NC}"
+echo -e "  ${GREEN}✔${NC} SSL 证书       ${YELLOW}/etc/mysql/ssl/${NC}"
+echo -e "  ${GREEN}✔${NC} SSH 服务       $SSH_STATUS"
 echo ""
-echo -e "${GREEN}现在可以上传版本，开服！${NC}"
+echo -e "  ${BLUE}ℹ${NC} 安装日志: $LOG_FILE"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo -e "  ${GREEN}${BOLD}🚀 现在可以上传版本，开服！${NC}"
 echo ""

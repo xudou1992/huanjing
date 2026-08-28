@@ -112,6 +112,10 @@ systemctl restart sshd
 
 最新版脚本安装过程中会自动检测此问题并尝试修复。
 
+### 提示已安装 MySQL
+
+脚本启动时会自动检测本机是否已装 MySQL：交互模式可确认继续，免交互模式（`-p`）会直接退出。重复安装前建议先执行 `./install.sh uninstall` 清理。
+
 ### 提示找不到 mysql-packages
 
 把 `mysql-packages/` 目录（或 `mysql-packages.tar.gz`）放到 `install.sh` 同目录下再运行。
