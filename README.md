@@ -45,7 +45,9 @@ chmod +x install.sh
 ```
 
 - 安装包查找顺序：脚本同目录 → 当前目录 → `/home` → `/root`；`mysql-packages/` 文件夹或 `mysql-packages.tar.gz` 压缩包均可识别。
-- **密码规则**：至少 4 位；不能包含 `$` `` ` `` `"` `'` 空格、反斜杠（会破坏 SQL 配置写入）。
+- **MySQL root 密码**：至少 4 位；不能包含 `$` `` ` `` `"` `'` 空格、反斜杠（会破坏 SQL 配置写入）。
+- **Redis 密码**：与 MySQL 分开设置。交互模式可自定义（直接回车自动生成 16 位随机密码）；`-p` 免交互模式自动生成随机密码。
+- 两个密码安装完成后保存在服务器 `/root/huanjing-credentials.txt`（权限 600，仅 root 可读），汇总面板也会显示。
 
 ## 安装内容（13 步全自动）
 
@@ -78,10 +80,11 @@ cd /root/huanjing
 | 数据库 | `tlbbdb_main`（主库）、`tlbbdb_world`（世界库）、`web`（网页库） |
 | MySQL 配置 | `/etc/my.cnf` |
 | ODBC 数据源 | `/etc/odbc.ini` |
-| Redis | 端口 `6379`，`requirepass` 同 MySQL root 密码，已开启远程访问 |
+| Redis | 端口 `6379`，独立 `requirepass` 密码，已开启远程访问 |
 | SSL 证书 | `/etc/mysql/ssl/` |
 | 数据目录 | `/var/lib/mysql` |
 | 免密登录配置 | `/root/.my.cnf`（root 本机执行 mysql 不再需要输密码） |
+| 账号信息备份 | `/root/huanjing-credentials.txt`（MySQL/Redis 密码，仅 root 可读） |
 | 日志 | `/var/log/mysqld.log` |
 
 ## 常用命令

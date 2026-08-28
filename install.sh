@@ -147,7 +147,7 @@ if [ "$1" = "uninstall" ] || [ "$1" = "-u" ]; then
     info "删除数据文件和配置..."
     rm -rf /var/lib/mysql /var/log/mysqld.log /root/mysql8 /root/.my.cnf \
         /etc/my.cnf.rpmsave /etc/odbc.ini /etc/mysql/ssl /var/lib/redis \
-        /etc/redis.conf.rpmsave
+        /etc/redis.conf.rpmsave /root/huanjing-credentials.txt
     ok "数据文件已清理"
 
     read -p "是否删除所有数据库残留？(y/N): " CLEAN_DB
@@ -203,6 +203,27 @@ else
     done
 fi
 ok "密码设置完成"
+
+# Redis 密码：与 MySQL 分开。-p 模式自动生成；交互模式可自填或回车自动生成
+gen_random_pw() { tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16; }
+if [ $NONINTERACTIVE -eq 1 ]; then
+    REDIS_PASSWORD=$(gen_random_pw)
+    ok "Redis 密码已自动生成（安装完成后在汇总面板与 /root/huanjing-credentials.txt 查看）"
+else
+    AUTO_REDIS=0
+    read -p "请输入 Redis 密码（与 MySQL 不同，直接回车自动生成）: " REDIS_PASSWORD
+    if [ -z "$REDIS_PASSWORD" ]; then
+        REDIS_PASSWORD=$(gen_random_pw)
+        AUTO_REDIS=1
+    elif [[ "$REDIS_PASSWORD" =~ $BAD_CHARS ]]; then
+        warn "Redis 密码包含 \$ \` \" ' 空格或反斜杠，已自动生成随机密码"
+        REDIS_PASSWORD=$(gen_random_pw)
+        AUTO_REDIS=1
+    fi
+    if [ $AUTO_REDIS -eq 1 ]; then
+        ok "Redis 密码已自动生成: ${YELLOW}$REDIS_PASSWORD${NC}"
+    fi
+fi
 
 # 步骤 1/13：腾讯云镜像源
 step_begin "配置腾讯云 YUM 镜像源"
@@ -448,14 +469,14 @@ ok "三个 ODBC 数据源已写入 /etc/odbc.ini"
 # 步骤 12/13：Redis
 step_begin "安装配置 Redis"
 run "安装 Redis（AppStream）" dnf install -y redis
-info "配置远程访问与访问密码（密码同 MySQL root）..."
+info "配置远程访问与独立访问密码..."
 sed -i 's/^bind .*/bind 0.0.0.0/' /etc/redis.conf
 sed -i 's/^protected-mode .*/protected-mode no/' /etc/redis.conf
 sed -i '/^requirepass /d' /etc/redis.conf
-echo "requirepass $MYSQL_ROOT_PASSWORD" >> /etc/redis.conf
+echo "requirepass $REDIS_PASSWORD" >> /etc/redis.conf
 run "设置 redis 开机自启" systemctl enable redis
 run "启动 redis" systemctl restart redis
-run_sh "Redis 连接验证" "redis-cli -a '$MYSQL_ROOT_PASSWORD' --no-auth-warning ping | grep -q PONG"
+run_sh "Redis 连接验证" "redis-cli -a '$REDIS_PASSWORD' --no-auth-warning ping | grep -q PONG"
 ok "Redis 配置完成（端口 6379）"
 
 # 步骤 13/13：重启验证
@@ -475,6 +496,19 @@ T_FMT=$(printf '%d分%02d秒' $((T_ELAPSED / 60)) $((T_ELAPSED % 60)))
 REDIS_VER=$(redis-server --version 2>/dev/null | awk '{print $3}' | cut -d= -f2)
 REDIS_VER="${REDIS_VER:-6.2}"
 
+# 账号信息落盘（仅 root 可读），防止忘记密码
+CRED_FILE=/root/huanjing-credentials.txt
+cat > "$CRED_FILE" <<EOF
+游戏服务器环境账号信息（生成于 $(date '+%Y-%m-%d %H:%M:%S')）
+============================================================
+MySQL root 密码 : $MYSQL_ROOT_PASSWORD
+Redis 密码      : $REDIS_PASSWORD
+Redis 端口      : 6379
+MySQL 端口      : 3306
+============================================================
+EOF
+chmod 600 "$CRED_FILE"
+
 clear
 echo -e "${GREEN}"
 echo  "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -485,11 +519,12 @@ echo -e "  ${GREEN}✔${NC} MySQL 版本     ${YELLOW}8.0.31${NC}（systemctl �
 echo -e "  ${GREEN}✔${NC} 数据库         ${YELLOW}tlbbdb_main / tlbbdb_world / web${NC}"
 echo -e "  ${GREEN}✔${NC} 远程访问       root@% 已开启，插件 mysql_native_password"
 echo -e "  ${GREEN}✔${NC} ODBC 数据源    ${YELLOW}/etc/odbc.ini${NC}"
-echo -e "  ${GREEN}✔${NC} Redis 服务     ${YELLOW}${REDIS_VER}${NC}（端口 6379，密码同 MySQL root）"
+echo -e "  ${GREEN}✔${NC} Redis 服务     ${YELLOW}${REDIS_VER}${NC}（端口 6379，独立密码）"
 echo -e "  ${GREEN}✔${NC} SSL 证书       ${YELLOW}/etc/mysql/ssl/${NC}"
 echo -e "  ${GREEN}✔${NC} SSH 服务       $SSH_STATUS"
 echo ""
 echo -e "  ${BLUE}ℹ${NC} 安装日志: $LOG_FILE"
+echo -e "  ${BLUE}ℹ${NC} MySQL / Redis 密码已保存: ${YELLOW}$CRED_FILE${NC}（仅 root 可读）"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 echo -e "  ${GREEN}${BOLD}🚀 现在可以上传版本，开服！${NC}"
