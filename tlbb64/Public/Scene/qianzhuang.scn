@@ -1,6 +1,0 @@
-[System]
-pathmapname=qianzhuang.path
-monsterfile=qianzhuang_monster.ini
-patrolpoint=qianzhuang_patrolpoint.ini
-eventfile=qianzhuang_area.ini
-stallinfodata=qianzhuang_StallInfo.stall

@@ -1,5 +1,0 @@
-[System]
-pathmapname=jishi.path
-monsterfile=jishi_monster.ini
-patrolpoint=jishi_patrolpoint.ini
-eventfile=jishi_area.ini

@@ -1,5 +1,0 @@
-[System]
-pathmapname=jiaochang.path
-monsterfile=jiaochang_monster.ini
-patrolpoint=jiaochang_patrolpoint.ini
-eventfile=jiaochang_area.ini

@@ -1,7 +1,0 @@
-[System]
-pathmapname=gaochang.path
-monsterfile=gaochang_monster.ini
-patrolpoint=gaochang_patrolpoint.ini
-eventfile=gaochang_area.ini
-growpointdata=gaochang_growpoint.txt
-growpointsetup=gaochang_growpointsetup.txt

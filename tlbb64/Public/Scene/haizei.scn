@@ -1,5 +1,0 @@
-[System]
-pathmapname=haizei.path
-monsterfile=haizei_monster.ini
-patrolpoint=haizei_patrolpoint.ini
-eventfile=haizei_area.ini

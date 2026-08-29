@@ -1,5 +1,0 @@
-[System]
-pathmapname=xueshanjindi.path
-monsterfile=xueshanjindi_monster.ini
-patrolpoint=xueshanjindi_patrolpoint.ini
-eventfile=xueshanjindi_area.ini

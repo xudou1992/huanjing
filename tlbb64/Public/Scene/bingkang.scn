@@ -1,7 +1,0 @@
-[System]
-pathmapname=bingkang.path
-monsterfile=bingkang_monster.ini
-patrolpoint=bingkang_patrolpoint.ini
-growpointdata=bingkang_growpoint.txt
-growpointsetup=bingkang_growpointsetup.txt
-eventfile=bingkang_area.ini

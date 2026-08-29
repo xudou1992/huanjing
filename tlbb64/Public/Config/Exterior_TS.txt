@@ -1,8 +1,0 @@
-INT	STRING	STRING	STRING	INT	INT	INT	INT	INT	INT	INT	INT	INT	INT	INT	INT	INT	INT	FLOAT	FLOAT	FLOAT	FLOAT	FLOAT	FLOAT	INT	INT	INT
-ExteriorId	Name	Icon	Desc	VisualId	ActionId	PosXMin	PosXMax	PosYMin	PosYMax	PosZMin	PosZMax	默认参数（女）	默认参数（女）	默认参数（女）	默认参数（男）	默认参数（男）	默认参数（男）	客户端用偏移	客户端用偏移	客户端用偏移	客户端用偏移	客户端用偏移	客户端用偏移	能否调节	是否包头	
-1	护耳绒帽	TopDecorate1_2	护耳绒帽	4	-1	0	255	0	255	0	255	128	128	128	128	128	128	0.1	0.1	0.1	0.1	0.1	0.1	0	0	38003383
-2	戍月神君	TopDecorate1_3	戍月神君	6	-1	0	255	0	255	0	255	128	128	128	128	128	128	0.1	0.1	0.1	0.1	0.1	0.1	1	0	38003466
-3	烁影浮光	TopDecorate1_4	烁影浮光	7	-1	0	255	0	255	0	255	128	128	128	128	128	128	0.1	0.1	0.1	0.1	0.1	0.1	1	0	38003567
-4	繁花织夏	TopDecorate1_5	繁花织夏	11	-1	0	255	0	255	0	255	128	128	128	128	128	128	0.1	0.1	0.1	0.1	0.1	0.1	1	0	38003585
-5	兰若幽帘	TopDecorate1_6	兰若幽帘	13	-1	0	255	0	255	0	255	128	128	128	128	128	128	0.1	0.1	0.1	0.1	0.1	0.1	1	0	38003585
-6	五载同行	TopDecorate1_7	五载同行	18	-1	0	255	0	255	0	255	128	128	128	128	128	128	0.1	0.1	0.1	0.1	0.1	0.1	1	0	38003696

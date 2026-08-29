@@ -1,5 +1,0 @@
-[System]
-pathmapname=wenquandong.path
-monsterfile=wenquandong_monster.ini
-patrolpoint=wenquandong_patrolpoint.ini
-eventfile=wenquandong_area.ini

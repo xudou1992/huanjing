@@ -1,5 +1,0 @@
-[System]
-pathmapname=xuanmuchang.path
-monsterfile=xuanmuchang_monster.ini
-patrolpoint=xuanmuchang_patrolpoint.ini
-eventfile=xuanmuchang_area.ini

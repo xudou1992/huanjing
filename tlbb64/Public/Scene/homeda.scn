@@ -1,5 +1,0 @@
-[System]
-pathmapname=homeda.path
-monsterfile=homeda_monster.ini
-patrolpoint=homeda_patrolpoint.ini
-eventfile=homeda_area.ini

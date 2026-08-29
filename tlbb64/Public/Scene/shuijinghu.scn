@@ -1,5 +1,0 @@
-[System]
-pathmapname=shuijinghu.path
-monsterfile=shuijinghu_monster.ini
-patrolpoint=shuijinghu_patrolpoint.ini
-eventfile=shuijinghu_area.ini
