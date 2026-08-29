@@ -134,11 +134,72 @@ do_status() {
     fi
 }
 
+do_backup() {
+    if [ ! -f /root/.my.cnf ]; then
+        err "未找到 /root/.my.cnf，请先完成环境安装"
+        exit 1
+    fi
+    local backup_dir=/root/tlbb_backup
+    mkdir -p "$backup_dir"
+    local f="$backup_dir/tlbbdb_$(date +%Y%m%d_%H%M%S).tar.gz"
+    info "正在导出 tlbbdb_main / tlbbdb_world / web（大库可能需要几分钟）..."
+    mysqldump --defaults-file=/root/.my.cnf --single-transaction --databases tlbbdb_main tlbbdb_world web 2>>"$LOG_FILE" | gzip > "$f"
+    ok "备份完成: $f ($(du -h "$f" | cut -f1))"
+    ls -1t "$backup_dir"/tlbbdb_*.tar.gz 2>/dev/null | tail -n +6 | xargs -r rm -f
+    info "自动保留最近 5 份备份（目录: $backup_dir）"
+}
+
+do_autostart() {
+    local mode="$1" sd
+    sd=$(find_server_dir) || { err "未找到服务端目录"; exit 1; }
+    case "$mode" in
+        on)
+            cat > /etc/systemd/system/tlbb.service <<EOF
+[Unit]
+Description=TLBB Game Server
+After=network.target mysqld.service redis.service
+Requires=mysqld.service redis.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=$sd
+ExecStart=/bin/sh $sd/run.sh
+ExecStop=/bin/sh $sd/stop.sh
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
+EOF
+            systemctl daemon-reload
+            systemctl enable tlbb.service >/dev/null 2>&1
+            ok "开机自启已开启（服务器重启后自动拉起服务端）"
+            info "也可用 systemctl start/stop tlbb 管理"
+            ;;
+        off)
+            systemctl disable tlbb.service >/dev/null 2>&1 || true
+            rm -f /etc/systemd/system/tlbb.service
+            systemctl daemon-reload
+            ok "开机自启已关闭"
+            ;;
+        *)
+            if [ -f /etc/systemd/system/tlbb.service ]; then
+                ok "开机自启: 已开启（tlbb.service）"
+            else
+                info "开机自启: 未开启（开启命令: tlbb autostart on）"
+            fi
+            ;;
+    esac
+}
+
 case "${1:-}" in
-    start)   do_start;   exit 0 ;;
-    stop)    do_stop;    exit 0 ;;
-    status)  do_status;  exit 0 ;;
-    restart) do_stop; sleep 3; do_start; exit 0 ;;
+    start)     do_start;     exit 0 ;;
+    stop)      do_stop;      exit 0 ;;
+    status)    do_status;    exit 0 ;;
+    restart)   do_stop; sleep 3; do_start; exit 0 ;;
+    backup)    do_backup;    exit 0 ;;
+    config)    shift; exec "$SCRIPT_DIR/config.sh" "$@" ;;
+    autostart) do_autostart "${2:-}"; exit 0 ;;
 esac
 
 if ! grep -qi "CentOS Stream 9\|CentOS Stream release 9" /etc/os-release 2>/dev/null; then
@@ -169,6 +230,23 @@ if [ "$1" != "uninstall" ] && [ "$1" != "-u" ]; then
     AVAIL_KB=$(df -Pk / | awk 'NR==2 {print $4}')
     if [ "${AVAIL_KB:-0}" -lt $((2 * 1024 * 1024)) ]; then
         warn "根分区剩余空间不足 2GB（当前约 $((AVAIL_KB / 1024 / 1024))GB），安装可能失败"
+    fi
+
+    # Swap 检查：低内存且无 Swap 时创建，防止 MySQL / 服务端 OOM
+    if ! swapon --show 2>/dev/null | grep -q .; then
+        MEM_MB=$(free -m | awk '/^Mem:/ {print $2}')
+        if [ "${MEM_MB:-0}" -le 4000 ] && [ "${AVAIL_KB:-0}" -ge $((5 * 1024 * 1024)) ]; then
+            warn "未检测到 Swap 且内存仅 ${MEM_MB}MB，建议创建 4G Swap 防止内存不足"
+            if [ "$1" = "-p" ] || { read -p "  现在创建 4G Swap？(Y/n): " SW_Y; [[ ! $SW_Y =~ ^[Nn] ]]; }; then
+                info "创建 4G Swap..."
+                dd if=/dev/zero of=/swapfile bs=1M count=4096 status=none
+                chmod 600 /swapfile
+                mkswap -q /swapfile
+                swapon /swapfile
+                grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+                ok "Swap 已创建并写入 /etc/fstab（重启持久）"
+            fi
+        fi
     fi
 fi
 
@@ -230,6 +308,12 @@ DROP DATABASE IF EXISTS tlbbdb_world; DROP DATABASE IF EXISTS web;" >>"$LOG_FILE
         rmdir /etc/yum.repos.d/backup 2>/dev/null || true
     fi
     ok "yum 源已恢复"
+
+    info "移除全局命令与开机自启..."
+    rm -f /usr/local/bin/tlbb
+    systemctl disable tlbb.service >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/tlbb.service
+    systemctl daemon-reload 2>/dev/null || true
 
     echo ""
     echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -572,6 +656,13 @@ MySQL 端口      : 3306
 EOF
 chmod 600 "$CRED_FILE"
 
+# 注册全局 tlbb 命令（借鉴 gstlenv）：任意目录可用
+cat > /usr/local/bin/tlbb <<EOF
+#!/bin/bash
+exec $SCRIPT_DIR/install.sh "\$@"
+EOF
+chmod +x /usr/local/bin/tlbb
+
 clear
 echo -e "${GREEN}"
 echo  "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -594,7 +685,12 @@ for d in "$SCRIPT_DIR/tlbb64" /root/tlbb64 /home/tlbb64; do
         break
     fi
 done
-echo -e "  ${BLUE}ℹ${NC} 服务端管理: ${YELLOW}./install.sh start | stop | status | restart${NC}"
+echo -e "  ${BLUE}ℹ${NC} 服务端管理: ${YELLOW}tlbb start | stop | status | restart | backup${NC}"
+if sd=$(find_server_dir); then
+    GAME_PORTS=$(grep -ahoE '^Port[0-9]*=[0-9]+' "$sd/Server/Config/ServerInfo.ini" 2>/dev/null | cut -d= -f2 | sort -un | tr '\n' ' ')
+    [ -n "$GAME_PORTS" ] && echo -e "  ${YELLOW}→${NC} 云安全组请放行端口: ${YELLOW}$GAME_PORTS${NC}（6379/3306 建议仅对授权IP开放）"
+fi
+echo -e "  ${BLUE}ℹ${NC} 开机自启服务端: ${YELLOW}tlbb autostart on${NC}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 echo -e "  ${GREEN}${BOLD}🚀 现在可以上传版本，开服！${NC}"

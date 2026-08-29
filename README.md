@@ -87,16 +87,22 @@ chmod +x install.sh
 
 ## 服务端日常管理
 
-装完后在 `/root/huanjing` 目录执行：
+装完后**任意目录**执行全局命令 `tlbb`（等效于到安装目录跑 `./install.sh`）：
 
 ```bash
-./install.sh start      # 启动（ShareMemory → World → Server → Login，约1分钟）
-./install.sh stop       # 关闭（安全停服，各进程退出后自动打包日志到 tlbb64/logbak/）
-./install.sh status     # 查看四个组件进程状态
-./install.sh restart    # 重启
+tlbb start         # 启动（ShareMemory → World → Server → Login，约1分钟）
+tlbb stop          # 关闭（安全停服，各进程退出后自动打包日志到 tlbb64/logbak/）
+tlbb status        # 查看四个组件进程状态
+tlbb restart       # 重启
+tlbb backup        # 备份三个数据库到 /root/tlbb_backup/（自动保留最近5份）
+tlbb autostart on  # 开机自启（systemd，重启服务器自动拉起；off 关闭）
+tlbb config        # 重新执行服务端配置向导
+tlbb uninstall     # 卸载环境与全局命令
 ```
 
 等价于直接执行服务端自带的 `run.sh` / `stop.sh`，但会自动定位服务端目录并统一输出格式。
+
+> **安全组端口**：云服务器请按安装完成面板提示放行 `ServerInfo.ini` 中的端口；6379（Redis）和 3306（MySQL）建议仅对授权 IP 开放。
 
 ## 安装内容（13 步全自动）
 
@@ -183,3 +189,8 @@ systemctl restart sshd
 ### 网络拉取失败
 
 确认服务器能访问 `api.github.com`；如仓库以后改为私有，可给 `netinstall.sh` 传 `-t <GitHub Token>`（需 repo 读取权限）或设置 `GH_TOKEN` 环境变量。
+
+## 参考的开源项目
+
+- [yulinzhihou/gstlenv](https://github.com/yulinzhihou/gstlenv) — 天龙服务端 Docker 化自动部署（多发行版/多版本）。本项目借鉴了它的全局命令（`tlbb`）、数据库备份、Swap 自动创建与端口提示设计；本项目采用原生 RPM 部署，无 Docker 依赖。
+- [GavinTan/tlbb](https://github.com/GavinTan/tlbb) — 天龙服务端环境部署（离线包方案）。

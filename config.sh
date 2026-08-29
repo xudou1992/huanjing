@@ -214,10 +214,19 @@ if [ -n "$NEW_IP" ]; then
     grep -a '^IP0=' "$CFG/ServerInfo.ini" | head -1 | sed 's/^/  ServerInfo.ini  /'
 fi
 
+# 注册全局 tlbb 命令（指向同目录的 install.sh 管理器）
+if [ -f "$SCRIPT_DIR/install.sh" ]; then
+    cat > /usr/local/bin/tlbb <<EOF
+#!/bin/bash
+exec $SCRIPT_DIR/install.sh "\$@"
+EOF
+    chmod +x /usr/local/bin/tlbb
+fi
+
 echo ""
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 ok "服务端配置修改完成！"
 info "原配置备份: $BACKUP_FILE"
 info "如需回滚: cd $SERVER_DIR && tar -xzf $(basename "$BACKUP_FILE")"
-info "请重启服务端使配置生效（如: cd $SERVER_DIR && sh run.sh）"
+info "重启服务端使配置生效: ${YELLOW}tlbb restart${NC}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
