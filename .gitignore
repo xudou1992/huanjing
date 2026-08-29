@@ -7,3 +7,4 @@ tlbb64/Server/nohup.out
 tlbb64/logbak/
 tlbb64/ConfigBackup_*.tar.gz
 tlbb64/config_change.log
+dist/

@@ -6,9 +6,11 @@ CentOS / RHEL 系通杀：一条命令完成 **MySQL 8.0 + Redis + ODBC 驱动 +
 
 | 文件 | 说明 |
 |---|---|
-| `netinstall.sh` | 网络拉取版：从 GitHub 下载整包并自动执行安装（新服务器只需一条命令） |
+| `netinstall.sh` | 网络拉取版：稀疏下载环境脚本与 MySQL 包，不下载 `tlbb*` 服务端目录 |
 | `install.sh` | 本地一键安装/卸载脚本（MySQL + Redis + 三个数据库） |
 | `config.sh` | 一键修改服务端配置：写入数据库/Redis 密码与外网 IP |
+| `menu.sh` | 交互式管理菜单：环境安装、解压服务端 tar 包、配置、启停、状态和备份 |
+| `docker-env.sh` | Docker 多版本环境：环境1-4、镜像内置数据库初始化、服务端容器化启停 |
 | `tlbb64/` | 天龙服务端（Server 端程序 + Public 脚本资源，GBK 编码原样保存） |
 | `mysql-packages/` | MySQL 8.0.31 RPM 包（el9）+ 三个数据库的 SQL 备份 |
 | `.gitignore` / `.gitattributes` | git 配置（忽略压缩包与运行时文件，tlbb64 不做换行转换） |
@@ -33,7 +35,15 @@ ODBC 驱动路径会在安装时自动探测并写入 `/etc/odbc.ini`，无需�
 
 ### 服务端版本通配
 
-服务端目录名不限（`tlbb64` / `tlbb757` / `tlbb980` 等任意 `tlbb*` 命名均可），脚本按 `Server/Config/ServerInfo.ini` 结构自动识别。一键部署时按目录名放入 `/home/`（如 `tlbb757 → /home/tlbb757`），启动/关闭脚本内置路径自动适配，`tlbb` 全局命令自动定位。
+服务端目录名不限（`tlbb` / `tlbb64` / `tlbb757` / `tlbb980` 等任意 `tlbb*` 命名均可），脚本按 `Server/Config/ServerInfo.ini` 结构自动识别。一键部署时按目录名放入 `/home/`（如 `tlbb757 → /home/tlbb757`），启动/关闭脚本内置路径自动适配，`tlbb` 全局命令自动定位。`tlbb status` 会自动识别实际二进制名，例如 `CenterServer1`、`ShareMemory1`、`World1`、`Server1`、`Login1` 或对应的 `*64` 版本。
+
+### 环境版本边界
+
+当前仓库内置的是 **环境4：EL9 x86_64 + MySQL 8.0.31 + Redis**，适合源端 64 位服务端。一个原生 MySQL 实例不能同时作为 5.1、5.7 和 8.0 使用：数据库数据目录、认证方式和库兼容性都不同。
+
+参考 [gstlenv](https://github.com/yulinzhihou/gstlenv) 的做法，真正的“环境1-4 通杀”应使用 Docker 为每个服务端隔离 MySQL 与 Redis。其组合为：环境1 `gs_server + gs_mysql51`、环境2 `gs_server7 + gs_mysql51`、环境3 `gs_server7 + gs_mysql57`、环境4 `gs_server9 + gs_mysql80`。因此部署时先按服务端包选择环境，不能让旧库直接接到本仓库的 MySQL 8。
+
+Docker 菜单已经集成到 `menu.sh` 的选项 `9`。环境1-3启动后执行镜像内置的 `/usr/local/bin/init_db.sh`，无需另传 SQL；环境4导入本仓库提供的 MySQL 8 三份 SQL。Docker 文件与数据单独放在 `/opt/huanjing-docker`，不会覆盖原生 MySQL 环境。服务端包先上传到 `/home`，在 Docker 菜单选择 `2 → 3 → 5` 完成解压、配置和启动。
 
 ### 源站故障容错（YUM 源挂了还能用吗）
 
@@ -44,21 +54,90 @@ ODBC 驱动路径会在安装时自动探测并写入 `/etc/odbc.ini`，无需�
 
 ## 方式一：网络拉取一键部署（推荐）
 
-在全新服务器上以 root 执行**一条命令**，自动完成全部四步：**下载整包 → 安装环境（MySQL + Redis + 数据库）→ 部署服务端到 `/home/tlbb64` 并写入密码/外网IP → 启动服务端**：
+在全新服务器上以 root 执行**一条命令**，自动完成：**显示下载地址与范围 → 稀疏下载环境脚本和 MySQL 包 → 安装 MySQL、Redis、ODBC 与三个数据库**。`tlbb*` 服务端目录不会下载。
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/xudou1992/huanjing/main/netinstall.sh)
+bash <(curl --progress-bar -fL https://raw.githubusercontent.com/xudou1992/huanjing/main/netinstall.sh)
 ```
 
-过程中只需按提示输入 MySQL root 密码（两次确认）、Redis 密码（回车自动生成）并确认启动。
+过程中只需按提示输入 MySQL root 密码（两次确认）与 Redis 密码（回车自动生成）。下载阶段会显示 GitHub 仓库地址、分支和下载范围。
 
-**全自动免交互版**（Redis 密码自动生成、服务端自动启动，适合脚本化批量部署）：
+**全自动免交互版**（Redis 密码自动生成，适合脚本化批量部署）：
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/xudou1992/huanjing/main/netinstall.sh) -p 你的MySQL密码
+bash <(curl --progress-bar -fL https://raw.githubusercontent.com/xudou1992/huanjing/main/netinstall.sh) -p 你的MySQL密码
 ```
 
-可选参数：`--no-config` 只装环境不改服务端配置；`--no-start` 装/配完不启动服务端；`-t <Token>` 仓库转私有时使用。
+可选参数：`-t <Token>` 仓库转私有时使用。
+
+环境安装完成后，将服务端压缩包（`.tar` / `.tar.gz` / `.tgz` / `.tar.xz`）上传到 `/home/`，再启动交互菜单：
+
+```bash
+sh /root/huanjing/menu.sh
+```
+
+菜单选择 `2` 后会列出 `/home` 下的服务端压缩包。选中后输入部署目录名（默认识别为 `tlbb*` 目录），脚本会解压、检查 `Server/Config/ServerInfo.ini`，并询问是否立即写入数据库、Redis 与外网 IP 配置。之后在菜单选择 `4` 启动服务端。
+
+服务端管理也可使用短命令：
+
+```bash
+tlbb menu      # 打开交互菜单
+tlbb untar     # 直接进入服务端解压流程
+tlbb config    # 写入配置
+tlbb start     # 启动
+tlbb stop      # 停止
+tlbb status    # 查看状态
+tlbb backup    # 备份数据库
+tlbb help      # 查看全部命令
+```
+
+解压时若目标 `/home/tlbb*` 已存在，菜单会先安全停服并打包原服务端到 `/home/tlbb_backup/`，再替换为新版本。
+
+### 国内镜像部署
+
+默认命令使用 GitHub。国内服务器访问 GitHub 不稳定时，将完整仓库镜像到 Gitee 或自建 Git 服务，并把 `netinstall.sh` 放到同一国内站点。启动时通过 `HUANJING_REPO_URL` 指定镜像 Git 地址：
+
+```bash
+HUANJING_REPO_URL=https://gitee.com/你的命名空间/huanjing.git \
+bash <(curl --progress-bar -fL https://gitee.com/你的命名空间/huanjing/raw/main/netinstall.sh)
+```
+
+脚本会显示实际镜像地址，并从该地址稀疏下载环境文件；服务端 tar 仍由你手动上传到 `/home/`，不会从镜像检出。
+
+### 自有域名一键部署
+
+不想维护 Git 镜像时，使用单个环境压缩包发布。维护端执行：
+
+```bash
+./pack-release.sh
+```
+
+将生成的 `dist/huanjing-env.tar.gz` 与 `bootstrap.sh` 上传到你的站点同一路径，例如 `https://dl.example.com/huanjing/`。上传前把 `bootstrap.sh` 的 `SOURCE_BASE` 改为：
+
+```bash
+SOURCE_BASE="https://dl.example.com/huanjing"
+```
+
+用户随后只需执行一条命令：
+
+```bash
+bash <(curl --progress-bar -fL https://dl.example.com/huanjing/bootstrap.sh)
+```
+
+启动脚本会显示实际下载链接，下载并解压单个环境包，然后直接进入 MySQL 与 Redis 在线安装流程。`huanjing-env.tar.gz` 仅包含安装脚本和三份数据库 SQL，不包含 MySQL RPM 或 `tlbb*` 服务端；服务端压缩包仍上传至目标机器 `/home/` 后通过 `menu.sh` 解压。
+
+需要环境1-4时，在 `menu.sh` 选择 `9` 进入 Docker 菜单；也可以直接执行：
+
+```bash
+bash /root/huanjing/docker-env.sh install 1   # 环境1：MySQL 5.1
+bash /root/huanjing/docker-env.sh install 2   # 环境2：MySQL 5.1
+bash /root/huanjing/docker-env.sh install 3   # 环境3：MySQL 5.7
+bash /root/huanjing/docker-env.sh install 4   # 环境4：MySQL 8.0 + 当前 SQL
+# 或安装后执行
+tlbb docker
+```
+
+环境1-3的数据库文件来自对应 Docker MySQL 镜像内置的 `init_db.sh`；环境4使用 `mysql-packages/` 下的三份 SQL。首次启动 Docker 菜单会询问是否安装 Docker，之后执行 `pull → up → 数据库初始化`。服务端仍需上传到 `/home`，再选择 Docker 菜单 `2 → 3 → 5`。
 
 ## 方式二：本地一键安装
 
@@ -90,7 +169,7 @@ chmod +x install.sh
 
 | 修改 | 文件 | 内容 |
 |---|---|---|
-| MySQL 密码 | `LoginInfo.ini` / `CenterServerInfo.ini` / `ShareMemInfo.ini` | `DBPassword=` 写入新密码 |
+| MySQL 密码 | `LoginInfo.ini` / `CenterServerInfo.ini` / `ShareMemInfo.ini` | 所有 `*DBPassword=` 字段写入新密码 |
 | Redis 密码 | `CenterServerInfo.ini` / `ServerInfo.ini` | 仅 `[Redis]` 段的 `Password=` |
 | 外网 IP | `ServerInfo.ini` | `[Billing]` 的 `192.168.*` 占位替换为公网 IP（自动检测，可手输或跳过） |
 
@@ -104,7 +183,7 @@ chmod +x install.sh
 
 - **按字段名定位**替换，不依赖旧密码值；`DBName`（tlbbdb_main / tlbbdb_world）与 `DBUser=root` 与本环境一致，无需修改
 - 服务端配置为 **GBK + CRLF 编码**，脚本用 perl 按字节安全替换，已做字节级校验：除目标字段外全部内容原样保留
-- 修改前自动备份 `Config` 目录与全部启动脚本到 `tlbb64/ConfigBackup_时间.tar.gz`，回滚命令在执行结束时打印
+- 修改前自动备份 `Server/Config` 目录与全部启动脚本到 `tlbb64/ConfigBackup_时间.tar.gz`，回滚命令在执行结束时打印
 - 服务端不在标准位置 `/home/tlbb64` 时，自动改写 `run.sh`/`stop.sh` 等脚本内置路径
 - 改完重启服务端生效（`./install.sh restart`）
 
@@ -125,7 +204,7 @@ tlbb uninstall     # 卸载环境与全局命令
 
 等价于直接执行服务端自带的 `run.sh` / `stop.sh`，但会自动定位服务端目录并统一输出格式。
 
-> **安全组端口**：云服务器请按安装完成面板提示放行 `ServerInfo.ini` 中的端口；6379（Redis）和 3306（MySQL）建议仅对授权 IP 开放。
+> **安全组端口**：安装会监听 `0.0.0.0:3306`（MySQL）和 `0.0.0.0:6379`（Redis），云服务器还需在安全组/防火墙放行；请仅向需要连接的来源 IP 放行这两个端口。
 
 ## 安装内容（13 步全自动）
 
@@ -135,7 +214,7 @@ tlbb uninstall     # 卸载环境与全局命令
 4. 按依赖顺序安装 7 个 RPM（含 MySQL ODBC 驱动）
 5. 启动 mysqld 并设置开机自启
 6. 获取 MySQL 初始临时密码
-7. 配置 root 密码、`root@%` 远程访问、`mysql_native_password` 认证插件
+7. 配置 root 密码、`root@%` 远程访问、`mysql_native_password` 认证插件与 MySQL TCP 监听
 8. 生成 SSL 证书（自动检测并修复 OpenSSL/SSH 版本冲突）
 9. 写入 `/etc/my.cnf` SSL 配置
 10. 创建并导入 `tlbbdb_main`、`tlbbdb_world`、`web` 三个数据库
@@ -158,7 +237,7 @@ cd /root/huanjing
 | 数据库 | `tlbbdb_main`（主库）、`tlbbdb_world`（世界库）、`web`（网页库） |
 | MySQL 配置 | `/etc/my.cnf` |
 | ODBC 数据源 | `/etc/odbc.ini` |
-| Redis | 端口 `6379`，独立 `requirepass` 密码，已开启远程访问 |
+| Redis | `0.0.0.0:6379`，独立 `requirepass` 密码，已开启远程访问 |
 | SSL 证书 | `/etc/mysql/ssl/` |
 | 数据目录 | `/var/lib/mysql` |
 | 免密登录配置 | `/root/.my.cnf`（root 本机执行 mysql 不再需要输密码） |

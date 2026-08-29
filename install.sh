@@ -95,6 +95,15 @@ find_server_dir() {
     return 1
 }
 
+list_server_components() {
+    # 服务端二进制的后缀随版本变化（例如 *64、*1），不能写死为某一个版本。
+    local sd="$1" family
+    for family in CenterServer ShareMemory World Server Login; do
+        find "$sd/Server" -maxdepth 1 -type f -perm -111 -printf '%f\n' 2>/dev/null |
+            grep -E "^${family}([0-9]+|64)?$" | sort | head -1 || true
+    done
+}
+
 do_start() {
     local sd
     sd=$(find_server_dir) || { err "未找到服务端目录（tlbb64，需含 Server/Config/ServerInfo.ini）"; exit 1; }
@@ -116,18 +125,26 @@ do_stop() {
 }
 
 do_status() {
-    local sd all=1 comp pid
+    local sd all=1 comp pid components
     sd=$(find_server_dir) || { err "未找到服务端目录"; exit 1; }
+    components=$(list_server_components "$sd")
+    if [ -z "$components" ]; then
+        err "未在 $sd/Server 找到可执行的 CenterServer / ShareMemory / World / Server / Login 组件"
+        exit 1
+    fi
     echo -e "${CYAN}${BOLD}服务端进程状态（$sd）${NC}"
-    for comp in ShareMemory64 World64 Server64 Login64; do
-        pid=$(pgrep -f "\./$comp" | head -1)
+    while IFS= read -r comp; do
+        [ -n "$comp" ] || continue
+        pid=$(pgrep -f "(^|/)$comp([[:space:]]|$)" | head -1 || true)
         if [ -n "$pid" ]; then
             echo -e "  ${GREEN}✔${NC} $comp   ${GREEN}运行中${NC} (PID $pid)"
         else
             echo -e "  ${RED}✖${NC} $comp   ${RED}未运行${NC}"
             all=0
         fi
-    done
+    done <<EOF
+$components
+EOF
     if [ $all -eq 1 ]; then
         ok "全部组件运行正常"
     else
@@ -193,7 +210,25 @@ EOF
     esac
 }
 
+do_help() {
+    cat <<'EOF'
+TLBB 管理命令：
+  tlbb menu       打开交互式管理菜单
+  tlbb docker     打开 Docker 多版本环境菜单（环境1-4）
+  tlbb untar      从 /home 选择服务端压缩包并解压
+  tlbb config     写入服务端数据库、Redis 与外网 IP 配置
+  tlbb start      启动服务端
+  tlbb stop       停止服务端
+  tlbb status     查看服务端进程状态
+  tlbb backup     备份数据库
+  tlbb autostart on|off
+EOF
+}
+
 case "${1:-}" in
+    menu)      exec "$SCRIPT_DIR/menu.sh" ;;
+    docker|env) exec "$SCRIPT_DIR/docker-env.sh" menu ;;
+    untar)     exec "$SCRIPT_DIR/menu.sh" --extract ;;
     start)     do_start;     exit 0 ;;
     stop)      do_stop;      exit 0 ;;
     status)    do_status;    exit 0 ;;
@@ -201,6 +236,7 @@ case "${1:-}" in
     backup)    do_backup;    exit 0 ;;
     config)    shift; exec "$SCRIPT_DIR/config.sh" "$@" ;;
     autostart) do_autostart "${2:-}"; exit 0 ;;
+    help|-h|--help) do_help; exit 0 ;;
 esac
 
 # 系统识别：通杀 RHEL 系（CentOS 7/8/9、AlmaLinux、Rocky、腾讯OS、阿里云Linux 等）
@@ -426,12 +462,12 @@ for m in mirrors.tencent.com mirrors.aliyun.com mirrors.ustc.edu.cn mirrors.huaw
     fi
 done
 
-info "备份原有 yum 源配置..."
-mkdir -p /etc/yum.repos.d/backup
-mv /etc/yum.repos.d/*.repo /etc/yum.repos.d/backup/ 2>/dev/null || true
 if [ "$OS_ID" != "centos" ]; then
     info "检测到 $OS_PRETTY，保留系统自带镜像源"
 elif [ -n "$YUM_MIRROR" ]; then
+    info "备份原有 yum 源配置..."
+    mkdir -p /etc/yum.repos.d/backup
+    mv /etc/yum.repos.d/*.repo /etc/yum.repos.d/backup/ 2>/dev/null || true
     info "使用已探测可用的镜像源: ${YELLOW}$YUM_MIRROR${NC}"
     if [ "$EL_VER" = "7" ]; then
         info "CentOS 7 已停止维护，写入 vault 归档源 + EPEL..."
@@ -485,8 +521,7 @@ gpgkey=https://$YUM_MIRROR/centos-stream/RPM-GPG-KEY-CentOS-Official
 EOF
     fi
 else
-    warn "所有国内镜像探测失败，恢复系统原有源继续（若系统源也不可用将无法安装依赖）"
-    mv /etc/yum.repos.d/backup/*.repo /etc/yum.repos.d/ 2>/dev/null || true
+    warn "所有国内镜像探测失败，保留系统原有源继续（若系统源也不可用将无法安装依赖）"
 fi
 run_opt "清理 yum 缓存" yum clean all
 run_opt "构建 yum 缓存（首次约1-2分钟）" yum makecache
@@ -503,7 +538,7 @@ step_begin "定位 MySQL 安装包与数据库备份"
 TAR_FILE=""; PKG_DIR=""
 find_packages() {
     for d in "$SCRIPT_DIR/mysql-packages" "$PWD/mysql-packages" /home/mysql-packages /root/mysql8; do
-        if [ -d "$d" ] && ls "$d"/*.rpm >/dev/null 2>&1; then
+        if [ -d "$d" ] && { ls "$d"/*.rpm >/dev/null 2>&1 || ls "$d"/*.sql >/dev/null 2>&1; }; then
             PKG_DIR="$d"; return 0
         fi
     done
@@ -535,7 +570,7 @@ if find_packages; then
     fi
 else
     TARGET_DIR=""
-    warn "未找到 mysql-packages/ 目录或 mysql-packages.tar.gz"
+    warn "未找到 mysql-packages/ 目录或 mysql-packages.tar.gz（RPM 或 SQL）"
     if [ "$EL_VER" = "9" ]; then
         info "MySQL 将改用官方在线源安装；数据库备份 SQL 缺失，导入步骤将跳过"
     else
@@ -685,8 +720,10 @@ cat >> /etc/my.cnf <<EOF
 ssl-ca = $OPENSSL_DIR/ca.pem
 ssl-cert = $OPENSSL_DIR/server-cert.pem
 ssl-key = $OPENSSL_DIR/server-key.pem
+bind-address = 0.0.0.0
+port = 3306
 EOF
-ok "SSL 配置已写入 /etc/my.cnf"
+ok "SSL 与 MySQL 远程监听已写入 /etc/my.cnf（0.0.0.0:3306）"
 
 # 步骤 10/13：导入数据库
 step_begin "导入数据库"
@@ -747,20 +784,30 @@ ok "三个 ODBC 数据源已写入 /etc/odbc.ini"
 step_begin "安装配置 Redis"
 run "安装 Redis" yum install -y redis
 info "配置远程访问与独立访问密码..."
-sed -i 's/^bind .*/bind 0.0.0.0/' /etc/redis.conf
-sed -i 's/^protected-mode .*/protected-mode no/' /etc/redis.conf
+if grep -q '^bind ' /etc/redis.conf; then
+    sed -i 's/^bind .*/bind 0.0.0.0/' /etc/redis.conf
+else
+    echo 'bind 0.0.0.0' >> /etc/redis.conf
+fi
+if grep -q '^protected-mode ' /etc/redis.conf; then
+    sed -i 's/^protected-mode .*/protected-mode no/' /etc/redis.conf
+else
+    echo 'protected-mode no' >> /etc/redis.conf
+fi
 sed -i '/^requirepass /d' /etc/redis.conf
 echo "requirepass $REDIS_PASSWORD" >> /etc/redis.conf
 run "设置 redis 开机自启" systemctl enable redis
 run "启动 redis" systemctl restart redis
 run_sh "Redis 连接验证" "redis-cli -a '$REDIS_PASSWORD' --no-auth-warning ping | grep -q PONG"
-ok "Redis 配置完成（端口 6379）"
+run_sh "Redis 远程监听验证" "ss -lnt | grep -Eq '(^|[[:space:]])0\\.0\\.0\\.0:6379([[:space:]]|$)'"
+ok "Redis 配置完成（0.0.0.0:6379）"
 
 # 步骤 13/13：重启验证
 step_begin "重启并验证服务"
 run "重启 mysqld" systemctl restart mysqld
 sleep 2
 run_sh "MySQL 登录验证" "mysql --defaults-file=/root/.my.cnf -e 'SHOW DATABASES;'"
+run_sh "MySQL 远程监听验证" "ss -lnt | grep -Eq '(^|[[:space:]])0\\.0\\.0\\.0:3306([[:space:]]|$)'"
 trap - ERR
 if systemctl is-active --quiet sshd; then
     SSH_STATUS="${GREEN}✔ 正常运行${NC}"

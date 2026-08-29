@@ -8,11 +8,11 @@
 #    ./config.sh -m MySQL密码 -r Redis密码 -i 外网IP    # 全自动免交互
 #
 #  修改内容（按字段名定位，兼容任意旧值；GBK/CRLF 编码原样保留）:
-#    LoginInfo.ini / CenterServerInfo.ini / ShareMemInfo.ini 的 DBPassword=
+#    LoginInfo.ini / CenterServerInfo.ini / ShareMemInfo.ini 的 *DBPassword=
 #    CenterServerInfo.ini / ServerInfo.ini [Redis] 段的 Password=
 #    ServerInfo.ini [Billing] 的外网IP占位（192.168.*）
 #
-#  修改前自动备份 Config 目录到 tlbb64/ConfigBackup_时间.tar.gz
+#  修改前自动备份 Server/Config 目录到 tlbb64/ConfigBackup_时间.tar.gz
 # ============================================================================
 set -e
 
@@ -128,13 +128,13 @@ fi
 
 # ---------------------------- 修改计划 --------------------------------------
 # -a: GBK 文件含高位字节，grep 需强制按文本处理
-mapfile -t DB_FILES < <(grep -la '^DBPassword=' "$CFG"/*.ini 2>/dev/null || true)
+mapfile -t DB_FILES < <(grep -la '^[A-Za-z]*DBPassword=' "$CFG"/*.ini 2>/dev/null || true)
 mapfile -t REDIS_FILES < <(grep -la '^\[Redis\]' "$CFG"/*.ini 2>/dev/null || true)
 
 echo ""
 echo -e "${CYAN}${BOLD}即将进行以下修改：${NC}"
 if [ -n "$MYSQL_PASSWORD" ]; then
-    for f in "${DB_FILES[@]}"; do echo -e "  ${GREEN}•${NC} $(basename "$f") → DBPassword=新MySQL密码"; done
+    for f in "${DB_FILES[@]}"; do echo -e "  ${GREEN}•${NC} $(basename "$f") → *DBPassword=新MySQL密码"; done
 else
     warn "未提供 MySQL 密码，跳过数据库密码修改"
 fi
@@ -159,10 +159,10 @@ if [ $ASSUME_YES -ne 1 ]; then
 fi
 
 # ---------------------------- 备份 ------------------------------------------
-# 备份 Config 目录 + 根目录全部启动/关闭脚本
+# 备份 Server/Config 目录 + 根目录全部启动/关闭脚本
 BACKUP_FILE="$SERVER_DIR/ConfigBackup_$(date +%Y%m%d_%H%M%S).tar.gz"
 SH_LIST=$(cd "$SERVER_DIR" && ls *.sh 2>/dev/null || true)
-tar -czf "$BACKUP_FILE" -C "$SERVER_DIR" Config $SH_LIST
+tar -czf "$BACKUP_FILE" -C "$SERVER_DIR" Server/Config $SH_LIST
 ok "已备份原配置与启动脚本: $BACKUP_FILE"
 
 # ---------------------------- 执行修改 --------------------------------------
@@ -172,7 +172,7 @@ CHANGE_LOG="$SERVER_DIR/config_change.log"
 
 if [ -n "$MYSQL_PASSWORD" ]; then
     for f in "${DB_FILES[@]}"; do
-        MYSQL_PASS="$MYSQL_PASSWORD" perl -i -pe 's/^(\s*DBPassword=)[^;\r\n]*/${1}$ENV{MYSQL_PASS}/' "$f"
+        MYSQL_PASS="$MYSQL_PASSWORD" perl -i -pe 's/^(\s*[A-Za-z]*DBPassword=)[^;\r\n]*/${1}$ENV{MYSQL_PASS}/' "$f"
         ok "MySQL 密码已写入 $(basename "$f")"
     done
     echo "[MySQL] ${DB_FILES[*]}" >> "$CHANGE_LOG"
@@ -192,11 +192,11 @@ if [ -n "$NEW_IP" ] && [ -f "$CFG/ServerInfo.ini" ]; then
     echo "[IP] ServerInfo.ini IP0=$NEW_IP" >> "$CHANGE_LOG"
 fi
 
-# 启动/关闭脚本内置路径适配（服务端不在标准位置 /home/tlbb64 时）
-if [ "$SERVER_DIR" != "/home/tlbb64" ]; then
+# 启动/关闭脚本内置路径适配。旧包常写 /home/tlbb，新版常写 /home/tlbb64。
+if [ "$SERVER_DIR" != "/home/tlbb" ] && [ "$SERVER_DIR" != "/home/tlbb64" ]; then
     for f in "$SERVER_DIR"/*.sh; do
         [ -f "$f" ] || continue
-        SRV_DIR="$SERVER_DIR" perl -i -pe 's{/home/tlbb64}{$ENV{SRV_DIR}}g' "$f"
+        SRV_DIR="$SERVER_DIR" perl -i -pe 's{/home/tlbb(?:64)?(?=/|\s|$)}{$ENV{SRV_DIR}}g' "$f"
     done
     ok "启动/关闭脚本内置路径已适配: $SERVER_DIR"
     echo "[Path] *.sh -> $SERVER_DIR" >> "$CHANGE_LOG"
@@ -206,10 +206,10 @@ fi
 echo ""
 echo -e "${CYAN}${BOLD}修改后关键配置：${NC}"
 for f in "${DB_FILES[@]}"; do
-    grep -a '^DBPassword=' "$f" | head -1 | sed "s|^|  $(basename "$f")  |"
+    grep -a '^[A-Za-z]*DBPassword=' "$f" | sed "s|^|  $(basename "$f")  |" | sed -E 's/(=.*)/=<已更新>/'
 done
 for f in "${REDIS_FILES[@]}"; do
-    perl -ne 'if(/^\s*\[([^\]]+)\]/){$sec=$1} print "$ARGV  [Redis] $1\n" if $sec eq "Redis" && /^\s*(Password=\S+)/' "$f" 2>/dev/null || true
+    perl -ne 'if(/^\s*\[([^\]]+)\]/){$sec=$1} print "$ARGV  [Redis] Password=<已更新>\n" if $sec eq "Redis" && /^\s*Password=/' "$f" 2>/dev/null || true
 done
 if [ -n "$NEW_IP" ]; then
     grep -a '^IP0=' "$CFG/ServerInfo.ini" | head -1 | sed 's/^/  ServerInfo.ini  /'
