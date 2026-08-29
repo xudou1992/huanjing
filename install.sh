@@ -84,6 +84,63 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
+# ---------------------------- 服务端管理子命令 --------------------------------
+find_server_dir() {
+    for d in "$SCRIPT_DIR/tlbb64" /home/tlbb64 /root/tlbb64; do
+        if [ -f "$d/Server/Config/ServerInfo.ini" ]; then
+            echo "$d"; return 0
+        fi
+    done
+    return 1
+}
+
+do_start() {
+    local sd
+    sd=$(find_server_dir) || { err "未找到服务端目录（tlbb64，需含 Server/Config/ServerInfo.ini）"; exit 1; }
+    echo -e "${CYAN}${BOLD}▶ 启动服务端: $sd${NC}"
+    info "顺序启动 ShareMemory → World → Server → Login（约需1分钟，请勿中断）..."
+    sh "$sd/run.sh"
+    echo ""
+    ok "启动脚本执行完毕，查看进程状态: ./install.sh status"
+}
+
+do_stop() {
+    local sd
+    sd=$(find_server_dir) || { err "未找到服务端目录"; exit 1; }
+    echo -e "${CYAN}${BOLD}■ 关闭服务端: $sd${NC}"
+    info "安全停服中（等待各进程退出并自动打包日志，可能需要几十秒）..."
+    sh "$sd/stop.sh"
+    echo ""
+    ok "服务端已全部关闭，日志已归档到 $sd/logbak/"
+}
+
+do_status() {
+    local sd all=1 comp pid
+    sd=$(find_server_dir) || { err "未找到服务端目录"; exit 1; }
+    echo -e "${CYAN}${BOLD}服务端进程状态（$sd）${NC}"
+    for comp in ShareMemory64 World64 Server64 Login64; do
+        pid=$(pgrep -f "\./$comp" | head -1)
+        if [ -n "$pid" ]; then
+            echo -e "  ${GREEN}✔${NC} $comp   ${GREEN}运行中${NC} (PID $pid)"
+        else
+            echo -e "  ${RED}✖${NC} $comp   ${RED}未运行${NC}"
+            all=0
+        fi
+    done
+    if [ $all -eq 1 ]; then
+        ok "全部组件运行正常"
+    else
+        warn "部分组件未运行，可执行 ./install.sh start 启动"
+    fi
+}
+
+case "${1:-}" in
+    start)   do_start;   exit 0 ;;
+    stop)    do_stop;    exit 0 ;;
+    status)  do_status;  exit 0 ;;
+    restart) do_stop; sleep 3; do_start; exit 0 ;;
+esac
+
 if ! grep -qi "CentOS Stream 9\|CentOS Stream release 9" /etc/os-release 2>/dev/null; then
     echo -e "${YELLOW}⚠ 当前系统不是 CentOS Stream 9，脚本可能不兼容（将继续执行）${NC}"
     grep PRETTY /etc/os-release 2>/dev/null | sed 's/^/    /' || true
@@ -128,6 +185,12 @@ if [ "$1" = "uninstall" ] || [ "$1" = "-u" ]; then
     read -p "确认要卸载 MySQL 吗？(输入 YES 继续): " CONFIRM
     if [ "$CONFIRM" != "YES" ]; then
         info "已取消卸载操作"; exit 0
+    fi
+
+    if sd=$(find_server_dir); then
+        info "检测到游戏服务端（$sd），先执行安全停服（可能需要几十秒）..."
+        sh "$sd/stop.sh" >>"$LOG_FILE" 2>&1 || true
+        ok "游戏服务端已关闭"
     fi
 
     info "停止 MySQL 与 Redis 服务..."
@@ -531,6 +594,7 @@ for d in "$SCRIPT_DIR/tlbb64" /root/tlbb64 /home/tlbb64; do
         break
     fi
 done
+echo -e "  ${BLUE}ℹ${NC} 服务端管理: ${YELLOW}./install.sh start | stop | status | restart${NC}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 echo -e "  ${GREEN}${BOLD}🚀 现在可以上传版本，开服！${NC}"

@@ -147,6 +147,9 @@ if [ -n "$NEW_IP" ]; then
 else
     warn "跳过外网IP修改"
 fi
+if [ "$SERVER_DIR" != "/home/tlbb64" ]; then
+    echo -e "  ${GREEN}•${NC} run.sh / stop.sh 等 → 内置路径 /home/tlbb64 改写为 $SERVER_DIR"
+fi
 echo ""
 
 if [ $ASSUME_YES -ne 1 ]; then
@@ -155,9 +158,11 @@ if [ $ASSUME_YES -ne 1 ]; then
 fi
 
 # ---------------------------- 备份 ------------------------------------------
+# 备份 Config 目录 + 根目录全部启动/关闭脚本
 BACKUP_FILE="$SERVER_DIR/ConfigBackup_$(date +%Y%m%d_%H%M%S).tar.gz"
-tar -czf "$BACKUP_FILE" -C "$SERVER_DIR" Config
-ok "已备份原配置: $BACKUP_FILE"
+SH_LIST=$(cd "$SERVER_DIR" && ls *.sh 2>/dev/null || true)
+tar -czf "$BACKUP_FILE" -C "$SERVER_DIR" Config $SH_LIST
+ok "已备份原配置与启动脚本: $BACKUP_FILE"
 
 # ---------------------------- 执行修改 --------------------------------------
 # GBK 编码按字节安全替换：perl 不做编码转换，只改 ASCII 字段值，保留 CRLF 与注释
@@ -184,6 +189,16 @@ if [ -n "$NEW_IP" ] && [ -f "$CFG/ServerInfo.ini" ]; then
     NEW_IP_ENV="$NEW_IP" perl -i -pe 's/^(\s*IP0=)192\.168\.[0-9.]+/${1}$ENV{NEW_IP_ENV}/' "$CFG/ServerInfo.ini"
     ok "外网IP已写入 ServerInfo.ini: $NEW_IP"
     echo "[IP] ServerInfo.ini IP0=$NEW_IP" >> "$CHANGE_LOG"
+fi
+
+# 启动/关闭脚本内置路径适配（服务端不在标准位置 /home/tlbb64 时）
+if [ "$SERVER_DIR" != "/home/tlbb64" ]; then
+    for f in "$SERVER_DIR"/*.sh; do
+        [ -f "$f" ] || continue
+        SRV_DIR="$SERVER_DIR" perl -i -pe 's{/home/tlbb64}{$ENV{SRV_DIR}}g' "$f"
+    done
+    ok "启动/关闭脚本内置路径已适配: $SERVER_DIR"
+    echo "[Path] *.sh -> $SERVER_DIR" >> "$CHANGE_LOG"
 fi
 
 # ---------------------------- 验证结果 --------------------------------------

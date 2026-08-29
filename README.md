@@ -19,21 +19,23 @@ CentOS Stream 9 专用：一条命令完成 **MySQL 8.0.31 + Redis + ODBC 驱动
 - 磁盘剩余空间 ≥ 2GB
 - 网络可访问 `mirrors.tencent.com`（YUM 镜像）和 `github.com`（拉取安装包）
 
-## 方式一：网络拉取一键安装（推荐）
+## 方式一：网络拉取一键部署（推荐）
 
-在全新服务器上以 root 执行一条命令：
+在全新服务器上以 root 执行**一条命令**，自动完成全部四步：**下载整包 → 安装环境（MySQL + Redis + 数据库）→ 部署服务端到 `/home/tlbb64` 并写入密码/外网IP → 启动服务端**：
 
 ```bash
 bash <(curl -sL https://raw.githubusercontent.com/xudou1992/huanjing/main/netinstall.sh)
 ```
 
-脚本会自动下载整个环境包到 `/root/huanjing` 并开始安装，过程中只需按提示输入一次 MySQL root 密码（需输入两次确认）。
+过程中只需按提示输入 MySQL root 密码（两次确认）、Redis 密码（回车自动生成）并确认启动。
 
-**全自动免交互版**（直接带密码，适合脚本化批量部署）：
+**全自动免交互版**（Redis 密码自动生成、服务端自动启动，适合脚本化批量部署）：
 
 ```bash
 bash <(curl -sL https://raw.githubusercontent.com/xudou1992/huanjing/main/netinstall.sh) -p 你的MySQL密码
 ```
+
+可选参数：`--no-config` 只装环境不改服务端配置；`--no-start` 装/配完不启动服务端；`-t <Token>` 仓库转私有时使用。
 
 ## 方式二：本地一键安装
 
@@ -53,7 +55,9 @@ chmod +x install.sh
 
 ## 第三步：一键配置服务端
 
-环境装好后，在服务器上执行（`config.sh` 会自动定位服务端目录并读取安装时保存的密码）：
+> 使用方式一的一键命令时，本步骤会**自动执行**，无需手动操作。以下仅用于手动补配或修改配置后重写。
+
+在服务器上执行（`config.sh` 会自动定位服务端目录并读取安装时保存的密码）：
 
 ```bash
 ./config.sh
@@ -77,8 +81,22 @@ chmod +x install.sh
 
 - **按字段名定位**替换，不依赖旧密码值；`DBName`（tlbbdb_main / tlbbdb_world）与 `DBUser=root` 与本环境一致，无需修改
 - 服务端配置为 **GBK + CRLF 编码**，脚本用 perl 按字节安全替换，已做字节级校验：除目标字段外全部内容原样保留
-- 修改前自动备份 `Config` 目录到 `tlbb64/ConfigBackup_时间.tar.gz`，回滚命令在执行结束时打印
-- 改完重启服务端生效（如 `sh run.sh`）
+- 修改前自动备份 `Config` 目录与全部启动脚本到 `tlbb64/ConfigBackup_时间.tar.gz`，回滚命令在执行结束时打印
+- 服务端不在标准位置 `/home/tlbb64` 时，自动改写 `run.sh`/`stop.sh` 等脚本内置路径
+- 改完重启服务端生效（`./install.sh restart`）
+
+## 服务端日常管理
+
+装完后在 `/root/huanjing` 目录执行：
+
+```bash
+./install.sh start      # 启动（ShareMemory → World → Server → Login，约1分钟）
+./install.sh stop       # 关闭（安全停服，各进程退出后自动打包日志到 tlbb64/logbak/）
+./install.sh status     # 查看四个组件进程状态
+./install.sh restart    # 重启
+```
+
+等价于直接执行服务端自带的 `run.sh` / `stop.sh`，但会自动定位服务端目录并统一输出格式。
 
 ## 安装内容（13 步全自动）
 
