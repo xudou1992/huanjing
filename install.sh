@@ -202,16 +202,38 @@ case "${1:-}" in
     autostart) do_autostart "${2:-}"; exit 0 ;;
 esac
 
-if ! grep -qi "CentOS Stream 9\|CentOS Stream release 9" /etc/os-release 2>/dev/null; then
-    echo -e "${YELLOW}⚠ 当前系统不是 CentOS Stream 9，脚本可能不兼容（将继续执行）${NC}"
-    grep PRETTY /etc/os-release 2>/dev/null | sed 's/^/    /' || true
+# 系统识别：通杀 RHEL 系（CentOS 7/8/9、AlmaLinux、Rocky、腾讯OS、阿里云Linux 等）
+OS_ID=$(sed -n 's/^ID=//p' /etc/os-release 2>/dev/null | head -1 | tr -d '"')
+OS_PRETTY=$(sed -n 's/^PRETTY_NAME=//p' /etc/os-release 2>/dev/null | head -1 | tr -d '"')
+EL_VER=$(rpm -E '%{rhel}' 2>/dev/null | grep -oE '^[0-9]+$' || true)
+if ! [[ "$EL_VER" =~ ^(7|8|9)$ ]]; then
+    EL_VER=$(sed -n 's/^VERSION_ID="\?\([0-9]*\).*/\1/p' /etc/os-release 2>/dev/null | head -1)
+fi
+case "$OS_ID:$EL_VER" in
+    tencentos:2) EL_VER=7 ;;
+    tencentos:3) EL_VER=8 ;;
+    alibaba:2)   EL_VER=7 ;;
+    alibaba:3)   EL_VER=8 ;;
+esac
+case "$OS_ID" in
+    centos|rhel|almalinux|rocky|tencentos|alibaba|anolis|opencloudos) ;;
+    *)
+        err "当前系统: ${OS_PRETTY:-未知}（ID=$OS_ID）"
+        err "本脚本支持 RHEL 系: CentOS 7/8/9、AlmaLinux、Rocky、腾讯OS、阿里云Linux 等"
+        err "游戏服务端为 CentOS 编译，Debian/Ubuntu 无法直接运行，请更换系统后重试"
+        exit 1
+        ;;
+esac
+if ! [[ "$EL_VER" =~ ^(7|8|9)$ ]]; then
+    err "未能识别系统版本（$OS_PRETTY），仅支持 EL 7/8/9"
+    exit 1
 fi
 
 clear
 echo -e "${CYAN}"
 echo  "╔══════════════════════════════════════════════╗"
 echo -e "║   ${BOLD}🚀 游戏服务器环境 · 一键部署${NC}${CYAN}"
-echo -e "║   MySQL 8.0.31 · CentOS Stream 9"
+echo -e "║   MySQL 8.0 + Redis · RHEL 系通杀（CentOS 7/8/9）"
 echo  "╚══════════════════════════════════════════════╝"
 echo -e "${NC}"
 
@@ -279,7 +301,7 @@ if [ "$1" = "uninstall" ] || [ "$1" = "-u" ]; then
     ok "MySQL 服务已停止"
 
     info "卸载 MySQL 与 Redis 组件..."
-    dnf remove -y mysql-community-server mysql-community-client \
+    yum remove -y mysql-community-server mysql-community-client \
         mysql-community-client-plugins mysql-community-common \
         mysql-community-icu-data-files mysql-community-libs \
         mysql-connector-odbc redis >>"$LOG_FILE" 2>&1 || true
@@ -300,7 +322,7 @@ DROP DATABASE IF EXISTS tlbbdb_world; DROP DATABASE IF EXISTS web;" >>"$LOG_FILE
     fi
 
     info "清理残留依赖..."
-    dnf autoremove -y >>"$LOG_FILE" 2>&1 || true
+    yum autoremove -y >>"$LOG_FILE" 2>&1 || true
 
     info "恢复原有 yum 源配置..."
     if [ -d /etc/yum.repos.d/backup ]; then
@@ -373,7 +395,7 @@ else
 fi
 
 # 步骤 1/13：腾讯云镜像源
-step_begin "配置腾讯云 YUM 镜像源"
+step_begin "配置系统镜像源（el$EL_VER · $OS_ID）"
 info "检查 yum/dnf 进程..."
 WAIT_COUNT=0
 while pgrep -x yum >/dev/null 2>&1 || pgrep -x dnf >/dev/null 2>&1; do
@@ -385,10 +407,39 @@ while pgrep -x yum >/dev/null 2>&1 || pgrep -x dnf >/dev/null 2>&1; do
     fi
 done
 
-info "备份原有 yum 源并写入腾讯云镜像配置..."
+info "备份原有 yum 源配置..."
 mkdir -p /etc/yum.repos.d/backup
 mv /etc/yum.repos.d/*.repo /etc/yum.repos.d/backup/ 2>/dev/null || true
-cat > /etc/yum.repos.d/CentOS-Base.repo << 'EOF'
+if [ "$OS_ID" = "centos" ] && [ "$EL_VER" = "7" ]; then
+    info "CentOS 7 已停止维护，写入腾讯云 vault 归档源 + EPEL..."
+    cat > /etc/yum.repos.d/CentOS-Base.repo << 'EOF'
+[base]
+name=CentOS-7 - Base - mirrors.tencent.com
+baseurl=https://mirrors.tencent.com/centos-vault/7.9.2009/os/$basearch/
+gpgcheck=1
+gpgkey=https://mirrors.tencent.com/centos-vault/RPM-GPG-KEY-CentOS-7
+
+[updates]
+name=CentOS-7 - Updates - mirrors.tencent.com
+baseurl=https://mirrors.tencent.com/centos-vault/7.9.2009/updates/$basearch/
+gpgcheck=1
+gpgkey=https://mirrors.tencent.com/centos-vault/RPM-GPG-KEY-CentOS-7
+
+[extras]
+name=CentOS-7 - Extras - mirrors.tencent.com
+baseurl=https://mirrors.tencent.com/centos-vault/7.9.2009/extras/$basearch/
+gpgcheck=1
+gpgkey=https://mirrors.tencent.com/centos-vault/RPM-GPG-KEY-CentOS-7
+
+[epel]
+name=EPEL-7 - mirrors.tencent.com
+baseurl=https://mirrors.tencent.com/epel/7/$basearch/
+gpgcheck=0
+enabled=1
+EOF
+elif [ "$OS_ID" = "centos" ]; then
+    info "写入腾讯云 CentOS Stream 镜像配置..."
+    cat > /etc/yum.repos.d/CentOS-Base.repo << 'EOF'
 [baseos]
 name=CentOS Stream $releasever - BaseOS - mirrors.tencent.com
 baseurl=https://mirrors.tencent.com/centos-stream/$stream/BaseOS/$basearch/os/
@@ -410,6 +461,9 @@ gpgcheck=1
 enabled=1
 gpgkey=https://mirrors.tencent.com/centos-stream/RPM-GPG-KEY-CentOS-Official
 EOF
+else
+    info "检测到 $OS_PRETTY，保留系统自带镜像源"
+fi
 run_opt "清理 yum 缓存" yum clean all
 run_opt "构建 yum 缓存（首次约1-2分钟）" yum makecache
 
@@ -420,8 +474,8 @@ run_opt "移除旧版 mysql-libs" yum -y remove mysql-libs
 run_opt "安装 libnuma 依赖" yum install -y libnuma*
 ok "依赖包安装完成"
 
-# 步骤 3/13：定位安装包
-step_begin "定位 MySQL 安装包"
+# 步骤 3/13：定位安装包（RPM 仅 el9 离线用；SQL 备份所有版本都需要）
+step_begin "定位 MySQL 安装包与数据库备份"
 TAR_FILE=""; PKG_DIR=""
 find_packages() {
     for d in "$SCRIPT_DIR/mysql-packages" "$PWD/mysql-packages" /home/mysql-packages /root/mysql8; do
@@ -456,27 +510,54 @@ if find_packages; then
         ok "解压完成"
     fi
 else
-    err "未找到 mysql-packages/ 目录或 mysql-packages.tar.gz"
-    info "请将 mysql-packages 文件夹（或压缩包）放在 install.sh 同目录后重试"
-    exit 1
+    TARGET_DIR=""
+    warn "未找到 mysql-packages/ 目录或 mysql-packages.tar.gz"
+    if [ "$EL_VER" = "9" ]; then
+        info "MySQL 将改用官方在线源安装；数据库备份 SQL 缺失，导入步骤将跳过"
+    else
+        info "el$EL_VER 使用官方在线源安装 MySQL；数据库备份 SQL 缺失，导入步骤将跳过"
+    fi
+    info "如需完整部署，请将 mysql-packages 放在 install.sh 同目录后重试"
 fi
 
-# 步骤 4/13：安装 MySQL 组件
-step_begin "安装 MySQL 组件"
-cd "$TARGET_DIR"
-RPM_COUNT=$(ls -1 *.rpm 2>/dev/null | wc -l)
-if [ "$RPM_COUNT" -eq 0 ]; then
-    err "未找到 RPM 文件"; ls -la "$TARGET_DIR"; exit 1
+# 步骤 4/13：安装 MySQL 组件（el9 离线 RPM / 其他版本官方在线源）
+step_begin "安装 MySQL 组件（el$EL_VER）"
+OFFLINE_RPMS=""
+if [ "$EL_VER" = "9" ] && [ -n "$TARGET_DIR" ] && ls "$TARGET_DIR"/*.rpm >/dev/null 2>&1; then
+    OFFLINE_RPMS=1
 fi
-info "找到 $RPM_COUNT 个 RPM 包，按依赖顺序安装（输出已写入日志）..."
-run "MySQL 8.0.31 及 ODBC 驱动安装完成" dnf install -y \
-    mysql-community-common-*.rpm \
-    mysql-community-libs-*.rpm \
-    mysql-community-client-plugins-*.rpm \
-    mysql-community-icu-data-files-*.rpm \
-    mysql-community-client-*.rpm \
-    mysql-community-server-*.rpm \
-    mysql-connector-odbc-*.rpm
+if [ "$OFFLINE_RPMS" = "1" ]; then
+    RPM_COUNT=$(ls -1 "$TARGET_DIR"/*.rpm 2>/dev/null | wc -l)
+    info "离线模式：使用自带 $RPM_COUNT 个 RPM 包（输出已写入日志）..."
+    cd "$TARGET_DIR"
+    run "MySQL 8.0.31 及 ODBC 驱动安装完成" yum install -y \
+        mysql-community-common-*.rpm \
+        mysql-community-libs-*.rpm \
+        mysql-community-client-plugins-*.rpm \
+        mysql-community-icu-data-files-*.rpm \
+        mysql-community-client-*.rpm \
+        mysql-community-server-*.rpm \
+        mysql-connector-odbc-*.rpm
+else
+    info "在线模式：写入 MySQL 官方源（repo.mysql.com）并安装..."
+    cat > /etc/yum.repos.d/mysql80-community.repo <<EOF
+[mysql80-community]
+name=MySQL 8.0 Community Server
+baseurl=https://repo.mysql.com/yum/mysql-8.0-community/el/$EL_VER/\$basearch/
+enabled=1
+gpgcheck=0
+
+[mysql-connectors-community]
+name=MySQL Connectors Community
+baseurl=https://repo.mysql.com/yum/mysql-connectors-community/el/$EL_VER/\$basearch/
+enabled=1
+gpgcheck=0
+EOF
+    if [ "$EL_VER" = "8" ]; then
+        run_opt "禁用 el8 内置 mysql 模块" yum -y module disable mysql
+    fi
+    run "MySQL 8.0 及 ODBC 驱动安装完成（官方在线源）" yum install -y mysql-community-server mysql-connector-odbc
+fi
 
 # 步骤 5/13：启动服务
 step_begin "启动 MySQL 服务"
@@ -567,22 +648,29 @@ ok "SSL 配置已写入 /etc/my.cnf"
 
 # 步骤 10/13：导入数据库
 step_begin "导入数据库"
-for DB in tlbbdb_main tlbbdb_world web; do
-    SQL_FILE="$TARGET_DIR/$DB.sql"
-    if [ -f "$SQL_FILE" ]; then
-        run "创建数据库 $DB" mysql --defaults-file=/root/.my.cnf -e "CREATE DATABASE IF NOT EXISTS $DB"
-        info "导入 $DB.sql（大文件可能需要几分钟）..."
-        run "导入 $DB 完成" bash -c "mysql --defaults-file=/root/.my.cnf '$DB' < '$SQL_FILE'"
-    else
-        warn "未找到 $SQL_FILE，跳过 $DB"
-    fi
-done
+if [ -z "$TARGET_DIR" ]; then
+    warn "未找到 SQL 备份（mysql-packages 目录），跳过数据库导入，请稍后手动导入"
+else
+    for DB in tlbbdb_main tlbbdb_world web; do
+        SQL_FILE="$TARGET_DIR/$DB.sql"
+        if [ -f "$SQL_FILE" ]; then
+            run "创建数据库 $DB" mysql --defaults-file=/root/.my.cnf -e "CREATE DATABASE IF NOT EXISTS $DB"
+            info "导入 $DB.sql（大文件可能需要几分钟）..."
+            run "导入 $DB 完成" bash -c "mysql --defaults-file=/root/.my.cnf '$DB' < '$SQL_FILE'"
+        else
+            warn "未找到 $SQL_FILE，跳过 $DB"
+        fi
+    done
+fi
 
 # 步骤 11/13：ODBC 数据源
 step_begin "配置 ODBC 数据源"
+# 动态定位 ODBC 驱动（不同版本/安装方式路径可能不同）
+ODBC_DRIVER=$(ls /usr/lib64/libmyodbc8a.so 2>/dev/null || ls /usr/lib64/libmyodbc*.so 2>/dev/null | head -1 || echo "/usr/lib64/libmyodbc8a.so")
+info "ODBC 驱动: $ODBC_DRIVER"
 cat > /etc/odbc.ini <<EOF
 [tlbbdb_main]
-Driver          = /usr/lib64/libmyodbc8a.so
+Driver          = $ODBC_DRIVER
 SERVER          = 127.0.0.1
 PORT            = 3306
 USER            = root
@@ -592,7 +680,7 @@ OPTION          = 3
 SOCKET          =
 
 [tlbbdb_world]
-Driver          = /usr/lib64/libmyodbc8a.so
+Driver          = $ODBC_DRIVER
 SERVER          = 127.0.0.1
 PORT            = 3306
 USER            = root
@@ -602,7 +690,7 @@ OPTION          = 3
 SOCKET          =
 
 [web]
-Driver          = /usr/lib64/libmyodbc8a.so
+Driver          = $ODBC_DRIVER
 SERVER          = 127.0.0.1
 PORT            = 3306
 USER            = root
@@ -615,7 +703,7 @@ ok "三个 ODBC 数据源已写入 /etc/odbc.ini"
 
 # 步骤 12/13：Redis
 step_begin "安装配置 Redis"
-run "安装 Redis（AppStream）" dnf install -y redis
+run "安装 Redis" yum install -y redis
 info "配置远程访问与独立访问密码..."
 sed -i 's/^bind .*/bind 0.0.0.0/' /etc/redis.conf
 sed -i 's/^protected-mode .*/protected-mode no/' /etc/redis.conf
@@ -642,6 +730,8 @@ T_ELAPSED=$((SECONDS - T_START))
 T_FMT=$(printf '%d分%02d秒' $((T_ELAPSED / 60)) $((T_ELAPSED % 60)))
 REDIS_VER=$(redis-server --version 2>/dev/null | awk '{print $3}' | cut -d= -f2)
 REDIS_VER="${REDIS_VER:-6.2}"
+MYSQL_VER=$(mysql --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -1)
+MYSQL_VER="${MYSQL_VER:-8.0}"
 
 # 账号信息落盘（仅 root 可读），防止忘记密码
 CRED_FILE=/root/huanjing-credentials.txt
@@ -669,7 +759,7 @@ echo  "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo -e "  ${BOLD}🎉 安装成功完成！${NC}${GREEN}   总耗时: $T_FMT"
 echo  "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo -e "${NC}"
-echo -e "  ${GREEN}✔${NC} MySQL 版本     ${YELLOW}8.0.31${NC}（systemctl 管理，开机自启）"
+echo -e "  ${GREEN}✔${NC} MySQL 版本     ${YELLOW}${MYSQL_VER}${NC}（systemctl 管理，开机自启）"
 echo -e "  ${GREEN}✔${NC} 数据库         ${YELLOW}tlbbdb_main / tlbbdb_world / web${NC}"
 echo -e "  ${GREEN}✔${NC} 远程访问       root@% 已开启，插件 mysql_native_password"
 echo -e "  ${GREEN}✔${NC} ODBC 数据源    ${YELLOW}/etc/odbc.ini${NC}"

@@ -1,6 +1,6 @@
 # huanjing — 游戏服务器环境一键部署
 
-CentOS Stream 9 专用：一条命令完成 **MySQL 8.0.31 + Redis + ODBC 驱动 + 三个业务数据库（tlbbdb_main / tlbbdb_world / web）+ SSL + ODBC 数据源** 的全自动安装配置。
+CentOS / RHEL 系通杀：一条命令完成 **MySQL 8.0 + Redis + ODBC 驱动 + 三个业务数据库（tlbbdb_main / tlbbdb_world / web）+ SSL + ODBC 数据源** 的全自动安装配置。
 
 ## 目录结构
 
@@ -15,9 +15,21 @@ CentOS Stream 9 专用：一条命令完成 **MySQL 8.0.31 + Redis + ODBC 驱动
 
 ## 环境要求
 
-- CentOS Stream 9，root 权限
-- 磁盘剩余空间 ≥ 2GB
-- 网络可访问 `mirrors.tencent.com`（YUM 镜像）和 `github.com`（拉取安装包）
+- **支持的系统（RHEL 系通杀）**：CentOS 7 / 8 / Stream 8 / Stream 9、AlmaLinux、Rocky Linux、腾讯OS、阿里云Linux，root 权限
+- **不支持**：Debian / Ubuntu（游戏服务端为 CentOS 编译，无法直接运行）
+- 磁盘剩余空间 ≥ 2GB（低内存小硬盘时会自动建议创建 Swap）
+- 网络：`mirrors.tencent.com`（系统镜像）、`repo.mysql.com`（MySQL 官方源，非 el9 系统在线安装用）、`github.com`（拉取安装包）
+
+### 不同系统的安装差异（脚本自动处理）
+
+| 系统 | MySQL 安装方式 | 说明 |
+|---|---|---|
+| CentOS Stream 9（含 Alma/Rocky 9） | 自带 el9 离线 RPM 包 | 全离线，速度最快 |
+| CentOS 7（含腾讯OS2、阿里云Linux2） | MySQL 官方在线源 | 自动配置 vault 归档源 + EPEL（7 已停止维护） |
+| CentOS 8 / Stream 8（含腾讯OS3、阿里云Linux3） | MySQL 官方在线源 | 自动禁用内置 mysql 模块 |
+| 其余 RHEL 系 | MySQL 官方在线源 | 保留系统自带镜像源不覆盖 |
+
+ODBC 驱动路径会在安装时自动探测并写入 `/etc/odbc.ini`，无需关心版本差异。
 
 ## 方式一：网络拉取一键部署（推荐）
 
