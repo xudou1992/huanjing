@@ -6,11 +6,14 @@
 #    ./config.sh                          # 交互式（自动读取安装时保存的密码）
 #    ./config.sh -d /root/tlbb64          # 指定服务端目录
 #    ./config.sh -m MySQL密码 -r Redis密码 -i 外网IP    # 全自动免交互
+#    ./config.sh -b 127.0.0.1:11100                     # 指定billing地址(默认本机:11100)
 #
 #  修改内容（按字段名定位，兼容任意旧值；GBK/CRLF 编码原样保留）:
 #    LoginInfo.ini / CenterServerInfo.ini / ShareMemInfo.ini 的 *DBPassword=
 #    CenterServerInfo.ini / ServerInfo.ini [Redis] 段的 Password=
 #    ServerInfo.ini [Billing] 的外网IP占位（192.168.*）
+#    BillingInfo.ini 生成/更新（游戏进程的 billing 上报配置，缺失会导致
+#      billing 验证服务"在线玩家"始终为空、无法统计在线人数；默认 127.0.0.1:11100）
 #
 #  修改前自动备份 Server/Config 目录到 tlbb64/ConfigBackup_时间.tar.gz
 # ============================================================================
@@ -45,15 +48,16 @@ if ! command -v perl >/dev/null 2>&1; then
 fi
 
 # ---------------------------- 参数解析 --------------------------------------
-SERVER_DIR="" ; MYSQL_PASSWORD="" ; REDIS_PASSWORD="" ; NEW_IP="" ; ASSUME_YES=0
+SERVER_DIR="" ; MYSQL_PASSWORD="" ; REDIS_PASSWORD="" ; NEW_IP="" ; BILLING_ADDR="" ; ASSUME_YES=0
 while [ $# -gt 0 ]; do
     case "$1" in
         -d|--dir)     SERVER_DIR="$2"; shift 2 ;;
         -m|--mysql)   MYSQL_PASSWORD="$2"; shift 2 ;;
         -r|--redis)   REDIS_PASSWORD="$2"; shift 2 ;;
         -i|--ip)      NEW_IP="$2"; shift 2 ;;
+        -b|--billing) BILLING_ADDR="$2"; shift 2 ;;
         -y|--yes)     ASSUME_YES=1; shift ;;
-        *)            err "未知参数: $1（支持 -d 目录 -m MySQL密码 -r Redis密码 -i 外网IP -y 免确认）"; exit 1 ;;
+        *)            err "未知参数: $1（支持 -d 目录 -m MySQL密码 -r Redis密码 -i 外网IP -b billing地址 -y 免确认）"; exit 1 ;;
     esac
 done
 
@@ -126,6 +130,16 @@ if [ -n "$NEW_IP" ] && ! [[ "$NEW_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; th
     err "IP 格式不正确: $NEW_IP"; exit 1
 fi
 
+# ---------------------------- billing地址 ------------------------------------
+# 游戏进程通过 BillingInfo.ini 上报"进入游戏/心跳"给 billing 验证服务,
+# 原版程序包通常不带此文件, 缺失时 billing 的在线玩家/在线人数永远为空。
+BILLING_ADDR=${BILLING_ADDR:-127.0.0.1:11100}
+BILLING_IP="${BILLING_ADDR%%:*}"
+BILLING_PORT="${BILLING_ADDR##*:}"
+if ! [[ "$BILLING_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || ! [[ "$BILLING_PORT" =~ ^[0-9]+$ ]]; then
+    err "billing 地址格式不正确（应为 IP:端口）: $BILLING_ADDR"; exit 1
+fi
+
 # ---------------------------- 修改计划 --------------------------------------
 # -a: GBK 文件含高位字节，grep 需强制按文本处理
 mapfile -t DB_FILES < <(grep -la '^[A-Za-z]*DBPassword=' "$CFG"/*.ini 2>/dev/null || true)
@@ -147,6 +161,11 @@ if [ -n "$NEW_IP" ]; then
     echo -e "  ${GREEN}•${NC} ServerInfo.ini → [Billing] 外网IP: $NEW_IP"
 else
     warn "跳过外网IP修改"
+fi
+if [ -f "$CFG/BillingInfo.ini" ]; then
+    echo -e "  ${GREEN}•${NC} BillingInfo.ini → [Billing] 更新为 $BILLING_IP:$BILLING_PORT"
+else
+    echo -e "  ${GREEN}•${NC} BillingInfo.ini → 新建（$BILLING_IP:$BILLING_PORT，billing在线统计必需）"
 fi
 if [ "$SERVER_DIR" != "/home/tlbb64" ]; then
     echo -e "  ${GREEN}•${NC} run.sh / stop.sh 等 → 内置路径 /home/tlbb64 改写为 $SERVER_DIR"
@@ -192,6 +211,20 @@ if [ -n "$NEW_IP" ] && [ -f "$CFG/ServerInfo.ini" ]; then
     echo "[IP] ServerInfo.ini IP0=$NEW_IP" >> "$CHANGE_LOG"
 fi
 
+# BillingInfo.ini：游戏进程的 billing 上报配置（原版程序包缺失，缺失=在线统计失效）
+if [ -f "$CFG/BillingInfo.ini" ]; then
+    BILLING_IP_ENV="$BILLING_IP" BILLING_PORT_ENV="$BILLING_PORT" perl -i -pe '
+        s/^(\s*IP0=)[^;\r\n]*/${1}$ENV{BILLING_IP_ENV}/;
+        s/^(\s*Port0=)[^;\r\n]*/${1}$ENV{BILLING_PORT_ENV}/;
+    ' "$CFG/BillingInfo.ini"
+    ok "BillingInfo.ini 已更新: $BILLING_IP:$BILLING_PORT"
+    echo "[Billing] BillingInfo.ini IP0=$BILLING_IP Port0=$BILLING_PORT" >> "$CHANGE_LOG"
+else
+    printf '[Billing]\r\nNumber=1\r\nIP0=%s\r\nPort0=%s\r\n' "$BILLING_IP" "$BILLING_PORT" > "$CFG/BillingInfo.ini"
+    ok "BillingInfo.ini 已新建: $BILLING_IP:$BILLING_PORT"
+    echo "[Billing] BillingInfo.ini created IP0=$BILLING_IP Port0=$BILLING_PORT" >> "$CHANGE_LOG"
+fi
+
 # 启动/关闭脚本内置路径适配。旧包常写 /home/tlbb，新版常写 /home/tlbb64。
 if [ "$SERVER_DIR" != "/home/tlbb" ] && [ "$SERVER_DIR" != "/home/tlbb64" ]; then
     for f in "$SERVER_DIR"/*.sh; do
@@ -213,6 +246,9 @@ for f in "${REDIS_FILES[@]}"; do
 done
 if [ -n "$NEW_IP" ]; then
     grep -a '^IP0=' "$CFG/ServerInfo.ini" | head -1 | sed 's/^/  ServerInfo.ini  /'
+fi
+if [ -f "$CFG/BillingInfo.ini" ]; then
+    echo "  BillingInfo.ini  $(tr -d '\r' < "$CFG/BillingInfo.ini" | grep -a -E '^(IP0|Port0)=' | tr '\n' ' ')"
 fi
 
 # 注册全局 tlbb 命令（指向同目录的 install.sh 管理器）
