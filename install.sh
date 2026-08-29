@@ -166,13 +166,14 @@ do_backup() {
         err "未发现任何游戏数据库（tlbbdb_* / web）"
         exit 1
     fi
-    local f="$backup_dir/tlbbdb_$(date +%Y%m%d_%H%M%S).tar.gz"
+    local f="$backup_dir/tlbbdb_$(date +%Y%m%d_%H%M%S).sql.gz"
     info "正在导出: $db_list（含存储过程/触发器/事件，大库可能需要几分钟）..."
     mysqldump --defaults-file=/root/.my.cnf --single-transaction \
         --routines --triggers --events \
         --databases $db_list 2>>"$LOG_FILE" | gzip > "$f"
     ok "备份完成: $f ($(du -h "$f" | cut -f1))"
-    ls -1t "$backup_dir"/tlbbdb_*.tar.gz 2>/dev/null | tail -n +6 | xargs -r rm -f
+    info "恢复方法: gunzip < $(basename "$f") | mysql --defaults-file=/root/.my.cnf"
+    ls -1t "$backup_dir"/tlbbdb_*.sql.gz 2>/dev/null | tail -n +6 | xargs -r rm -f
     info "自动保留最近 5 份备份（目录: $backup_dir）"
 }
 
@@ -416,9 +417,9 @@ do_logfix() {
     logdir="$sd/log"
     mkdir -p "$logdir"
     cp "$sd/run.sh" "$sd/run.sh.bak-$(date +%Y%m%d%H%M%S)"
-    # ./Xxx1 >/dev/null 2>&1 &  →  ./Xxx1 >>log/Xxx1.log 2>&1 &
+    # ./Xxx1 >/dev/null 2>&1 &  或  ./Xxx1 > /dev/null 2>&1 &  →  ./Xxx1 >>log/Xxx1.log 2>&1 &
     SRV_DIR="$sd" perl -i -pe '
-        s{(\./([A-Za-z0-9_]+))\s*>/dev/null\s+2>&1(\s*&\s*)$}{$1 >> $ENV{SRV_DIR}/log/$2.log 2>&1$3}g;
+        s{(\./([A-Za-z0-9_]+))\s*>\s*/dev/null\s+2>&1(\s*&\s*)$}{$1 >> $ENV{SRV_DIR}/log/$2.log 2>&1$3}g;
     ' "$sd/run.sh"
     ok "run.sh 已改为按组件落盘日志（$logdir/组件名.log），原脚本已备份"
     info "生效需重启服务端: tlbb restart"
