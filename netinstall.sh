@@ -25,7 +25,7 @@ set -e
 REPO="${HUANJING_REPO:-xudou1992/huanjing}"
 BRANCH="${HUANJING_BRANCH:-main}"
 INSTALL_DIR="/root/huanjing"
-SERVER_DIR="/home/tlbb64"
+SERVER_DIR=""   # 部署阶段按服务端目录名确定（/home/tlbb64 / /home/tlbb757 ...）
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -124,15 +124,23 @@ fi
 
 # ---------------------------- 阶段2：部署服务端并写配置 ----------------------
 echo ""
-info "阶段 2/3：部署服务端到 $SERVER_DIR 并写入配置..."
-if [ -d "$INSTALL_DIR/tlbb64/Server" ]; then
+info "阶段 2/3：部署服务端并写入配置..."
+SERVER_SRC=""
+for d in "$INSTALL_DIR"/tlbb*; do
+    if [ -f "$d/Server/Config/ServerInfo.ini" ]; then
+        SERVER_SRC="$d"; break
+    fi
+done
+if [ -n "$SERVER_SRC" ]; then
+    SERVER_DIR="/home/$(basename "$SERVER_SRC")"
+    info "识别服务端: $(basename "$SERVER_SRC") → 部署到 $SERVER_DIR（内置路径将自动适配）"
     if [ -d "$SERVER_DIR/Server" ]; then
         warn "$SERVER_DIR 已存在，跳过部署（如需更新请先备份并删除旧目录）"
     elif [ -e "$SERVER_DIR" ]; then
-        warn "$SERVER_DIR 已存在但不是完整服务端，请手动处理后执行: mv $INSTALL_DIR/tlbb64 $SERVER_DIR"
+        warn "$SERVER_DIR 已存在但不是完整服务端，请手动处理后执行: mv $SERVER_SRC $SERVER_DIR"
     else
         mkdir -p /home
-        mv "$INSTALL_DIR/tlbb64" "$SERVER_DIR"
+        mv "$SERVER_SRC" "$SERVER_DIR"
         ok "服务端已部署: $SERVER_DIR"
     fi
 fi

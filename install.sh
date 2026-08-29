@@ -86,7 +86,8 @@ fi
 
 # ---------------------------- 服务端管理子命令 --------------------------------
 find_server_dir() {
-    for d in "$SCRIPT_DIR/tlbb64" /home/tlbb64 /root/tlbb64; do
+    # 通配任意服务端目录名（tlbb64 / tlbb757 / tlbb980 / tlbb通杀 ...），标准位置优先
+    for d in /home/tlbb* /root/tlbb* "$SCRIPT_DIR"/tlbb*; do
         if [ -f "$d/Server/Config/ServerInfo.ini" ]; then
             echo "$d"; return 0
         fi
@@ -407,62 +408,85 @@ while pgrep -x yum >/dev/null 2>&1 || pgrep -x dnf >/dev/null 2>&1; do
     fi
 done
 
+# 多镜像探测：单一镜像关停时自动切换（腾讯→阿里→中科大→华为）
+probe_url() { [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 6 -L "$1" 2>/dev/null)" = "200" ]; }
+YUM_MIRROR=""
+if [ "$OS_ID" = "centos" ] && [ "$EL_VER" = "7" ]; then
+    PROBE_PATHS="centos-vault/7.9.2009/os/x86_64/repodata/repomd.xml epel/7/x86_64/repodata/repomd.xml"
+else
+    PROBE_PATHS="centos-stream/$EL_VER-stream/AppStream/x86_64/os/repodata/repomd.xml"
+fi
+for m in mirrors.tencent.com mirrors.aliyun.com mirrors.ustc.edu.cn mirrors.huaweicloud.com; do
+    MIRROR_OK=1
+    for p in $PROBE_PATHS; do
+        probe_url "https://$m/$p" || { MIRROR_OK=0; break; }
+    done
+    if [ $MIRROR_OK -eq 1 ]; then
+        YUM_MIRROR="$m"; break
+    fi
+done
+
 info "备份原有 yum 源配置..."
 mkdir -p /etc/yum.repos.d/backup
 mv /etc/yum.repos.d/*.repo /etc/yum.repos.d/backup/ 2>/dev/null || true
-if [ "$OS_ID" = "centos" ] && [ "$EL_VER" = "7" ]; then
-    info "CentOS 7 已停止维护，写入腾讯云 vault 归档源 + EPEL..."
-    cat > /etc/yum.repos.d/CentOS-Base.repo << 'EOF'
+if [ "$OS_ID" != "centos" ]; then
+    info "检测到 $OS_PRETTY，保留系统自带镜像源"
+elif [ -n "$YUM_MIRROR" ]; then
+    info "使用已探测可用的镜像源: ${YELLOW}$YUM_MIRROR${NC}"
+    if [ "$EL_VER" = "7" ]; then
+        info "CentOS 7 已停止维护，写入 vault 归档源 + EPEL..."
+        cat > /etc/yum.repos.d/CentOS-Base.repo << EOF
 [base]
-name=CentOS-7 - Base - mirrors.tencent.com
-baseurl=https://mirrors.tencent.com/centos-vault/7.9.2009/os/$basearch/
+name=CentOS-7 - Base - $YUM_MIRROR
+baseurl=https://$YUM_MIRROR/centos-vault/7.9.2009/os/\$basearch/
 gpgcheck=1
-gpgkey=https://mirrors.tencent.com/centos-vault/RPM-GPG-KEY-CentOS-7
+gpgkey=https://$YUM_MIRROR/centos-vault/RPM-GPG-KEY-CentOS-7
 
 [updates]
-name=CentOS-7 - Updates - mirrors.tencent.com
-baseurl=https://mirrors.tencent.com/centos-vault/7.9.2009/updates/$basearch/
+name=CentOS-7 - Updates - $YUM_MIRROR
+baseurl=https://$YUM_MIRROR/centos-vault/7.9.2009/updates/\$basearch/
 gpgcheck=1
-gpgkey=https://mirrors.tencent.com/centos-vault/RPM-GPG-KEY-CentOS-7
+gpgkey=https://$YUM_MIRROR/centos-vault/RPM-GPG-KEY-CentOS-7
 
 [extras]
-name=CentOS-7 - Extras - mirrors.tencent.com
-baseurl=https://mirrors.tencent.com/centos-vault/7.9.2009/extras/$basearch/
+name=CentOS-7 - Extras - $YUM_MIRROR
+baseurl=https://$YUM_MIRROR/centos-vault/7.9.2009/extras/\$basearch/
 gpgcheck=1
-gpgkey=https://mirrors.tencent.com/centos-vault/RPM-GPG-KEY-CentOS-7
+gpgkey=https://$YUM_MIRROR/centos-vault/RPM-GPG-KEY-CentOS-7
 
 [epel]
-name=EPEL-7 - mirrors.tencent.com
-baseurl=https://mirrors.tencent.com/epel/7/$basearch/
+name=EPEL-7 - $YUM_MIRROR
+baseurl=https://$YUM_MIRROR/epel/7/\$basearch/
 gpgcheck=0
 enabled=1
 EOF
-elif [ "$OS_ID" = "centos" ]; then
-    info "写入腾讯云 CentOS Stream 镜像配置..."
-    cat > /etc/yum.repos.d/CentOS-Base.repo << 'EOF'
+    else
+        cat > /etc/yum.repos.d/CentOS-Base.repo << EOF
 [baseos]
-name=CentOS Stream $releasever - BaseOS - mirrors.tencent.com
-baseurl=https://mirrors.tencent.com/centos-stream/$stream/BaseOS/$basearch/os/
+name=CentOS Stream - BaseOS - $YUM_MIRROR
+baseurl=https://$YUM_MIRROR/centos-stream/\$releasever-stream/BaseOS/\$basearch/os/
 gpgcheck=1
 enabled=1
-gpgkey=https://mirrors.tencent.com/centos-stream/RPM-GPG-KEY-CentOS-Official
+gpgkey=https://$YUM_MIRROR/centos-stream/RPM-GPG-KEY-CentOS-Official
 
 [appstream]
-name=CentOS Stream $releasever - AppStream - mirrors.tencent.com
-baseurl=https://mirrors.tencent.com/centos-stream/$stream/AppStream/$basearch/os/
+name=CentOS Stream - AppStream - $YUM_MIRROR
+baseurl=https://$YUM_MIRROR/centos-stream/\$releasever-stream/AppStream/\$basearch/os/
 gpgcheck=1
 enabled=1
-gpgkey=https://mirrors.tencent.com/centos-stream/RPM-GPG-KEY-CentOS-Official
+gpgkey=https://$YUM_MIRROR/centos-stream/RPM-GPG-KEY-CentOS-Official
 
 [extras-common]
-name=CentOS Stream $releasever - Extras packages - mirrors.tencent.com
-baseurl=https://mirrors.tencent.com/centos-stream/SIGs/$stream/extras/$basearch/extras-common/
+name=CentOS Stream - Extras - $YUM_MIRROR
+baseurl=https://$YUM_MIRROR/centos-stream/\$releasever-stream/extras-common/\$basearch/
 gpgcheck=1
 enabled=1
-gpgkey=https://mirrors.tencent.com/centos-stream/RPM-GPG-KEY-CentOS-Official
+gpgkey=https://$YUM_MIRROR/centos-stream/RPM-GPG-KEY-CentOS-Official
 EOF
+    fi
 else
-    info "检测到 $OS_PRETTY，保留系统自带镜像源"
+    warn "所有国内镜像探测失败，恢复系统原有源继续（若系统源也不可用将无法安装依赖）"
+    mv /etc/yum.repos.d/backup/*.repo /etc/yum.repos.d/ 2>/dev/null || true
 fi
 run_opt "清理 yum 缓存" yum clean all
 run_opt "构建 yum 缓存（首次约1-2分钟）" yum makecache
@@ -520,26 +544,27 @@ else
     info "如需完整部署，请将 mysql-packages 放在 install.sh 同目录后重试"
 fi
 
-# 步骤 4/13：安装 MySQL 组件（el9 离线 RPM / 其他版本官方在线源）
+# 步骤 4/13：安装 MySQL 组件（离线包 → 系统AppStream → 官方源，三级兜底）
 step_begin "安装 MySQL 组件（el$EL_VER）"
 OFFLINE_RPMS=""
 if [ "$EL_VER" = "9" ] && [ -n "$TARGET_DIR" ] && ls "$TARGET_DIR"/*.rpm >/dev/null 2>&1; then
     OFFLINE_RPMS=1
 fi
-if [ "$OFFLINE_RPMS" = "1" ]; then
-    RPM_COUNT=$(ls -1 "$TARGET_DIR"/*.rpm 2>/dev/null | wc -l)
-    info "离线模式：使用自带 $RPM_COUNT 个 RPM 包（输出已写入日志）..."
-    cd "$TARGET_DIR"
-    run "MySQL 8.0.31 及 ODBC 驱动安装完成" yum install -y \
-        mysql-community-common-*.rpm \
-        mysql-community-libs-*.rpm \
-        mysql-community-client-plugins-*.rpm \
-        mysql-community-icu-data-files-*.rpm \
-        mysql-community-client-*.rpm \
-        mysql-community-server-*.rpm \
-        mysql-connector-odbc-*.rpm
-else
-    info "在线模式：写入 MySQL 官方源（repo.mysql.com）并安装..."
+install_mysql_appstream() {
+    info "尝试系统 AppStream 的 MySQL 8.0（无需外部源）..."
+    yum -y module reset mysql >>"$LOG_FILE" 2>&1 || true
+    yum -y module enable mysql:8.0 >>"$LOG_FILE" 2>&1 || true
+    yum install -y mysql-server mysql-connector-odbc >>"$LOG_FILE" 2>&1
+}
+install_mysql_official() {
+    if ! probe_url "https://repo.mysql.com/yum/mysql-8.0-community/el/$EL_VER/x86_64/repodata/repomd.xml"; then
+        warn "MySQL 官方源当前不可达"
+        return 1
+    fi
+    info "写入 MySQL 官方源（repo.mysql.com）..."
+    if [ "$EL_VER" = "8" ]; then
+        yum -y module disable mysql >>"$LOG_FILE" 2>&1 || true
+    fi
     cat > /etc/yum.repos.d/mysql80-community.repo <<EOF
 [mysql80-community]
 name=MySQL 8.0 Community Server
@@ -553,10 +578,27 @@ baseurl=https://repo.mysql.com/yum/mysql-connectors-community/el/$EL_VER/\$basea
 enabled=1
 gpgcheck=0
 EOF
-    if [ "$EL_VER" = "8" ]; then
-        run_opt "禁用 el8 内置 mysql 模块" yum -y module disable mysql
-    fi
-    run "MySQL 8.0 及 ODBC 驱动安装完成（官方在线源）" yum install -y mysql-community-server mysql-connector-odbc
+    yum install -y mysql-community-server mysql-connector-odbc >>"$LOG_FILE" 2>&1
+}
+if [ "$OFFLINE_RPMS" = "1" ]; then
+    RPM_COUNT=$(ls -1 "$TARGET_DIR"/*.rpm 2>/dev/null | wc -l)
+    info "离线模式：使用自带 $RPM_COUNT 个 RPM 包（输出已写入日志）..."
+    cd "$TARGET_DIR"
+    run "MySQL 8.0.31 及 ODBC 驱动安装完成" yum install -y \
+        mysql-community-common-*.rpm \
+        mysql-community-libs-*.rpm \
+        mysql-community-client-plugins-*.rpm \
+        mysql-community-icu-data-files-*.rpm \
+        mysql-community-client-*.rpm \
+        mysql-community-server-*.rpm \
+        mysql-connector-odbc-*.rpm
+elif [ "$EL_VER" != "7" ] && install_mysql_appstream; then
+    ok "MySQL 8.0 及 ODBC 驱动安装完成（系统 AppStream 源）"
+elif install_mysql_official; then
+    ok "MySQL 8.0 及 ODBC 驱动安装完成（MySQL 官方源）"
+else
+    err "MySQL 安装失败：离线包 / AppStream / 官方源均不可用，详见 $LOG_FILE"
+    exit 1
 fi
 
 # 步骤 5/13：启动服务
@@ -769,7 +811,7 @@ echo -e "  ${GREEN}✔${NC} SSH 服务       $SSH_STATUS"
 echo ""
 echo -e "  ${BLUE}ℹ${NC} 安装日志: $LOG_FILE"
 echo -e "  ${BLUE}ℹ${NC} MySQL / Redis 密码已保存: ${YELLOW}$CRED_FILE${NC}（仅 root 可读）"
-for d in "$SCRIPT_DIR/tlbb64" /root/tlbb64 /home/tlbb64; do
+for d in /home/tlbb* /root/tlbb* "$SCRIPT_DIR"/tlbb*; do
     if [ -f "$d/Server/Config/ServerInfo.ini" ]; then
         echo -e "  ${YELLOW}→${NC} 检测到服务端目录: ${YELLOW}$d${NC} — 运行 ${YELLOW}./config.sh${NC} 一键写入密码与外网IP"
         break

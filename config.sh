@@ -58,8 +58,9 @@ while [ $# -gt 0 ]; do
 done
 
 # ---------------------------- 定位服务端 ------------------------------------
+# 通配任意服务端目录名（tlbb64 / tlbb757 / tlbb980 ...），标准位置优先
 if [ -z "$SERVER_DIR" ]; then
-    for d in "$SCRIPT_DIR/tlbb64" "$PWD/tlbb64" /root/tlbb64 /home/tlbb64; do
+    for d in /home/tlbb* /root/tlbb* "$SCRIPT_DIR"/tlbb* "$PWD"/tlbb*; do
         if [ -f "$d/Server/Config/ServerInfo.ini" ]; then
             SERVER_DIR="$d"; break
         fi
