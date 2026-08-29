@@ -31,6 +31,23 @@ info "下载地址: $ARCHIVE_URL"
 info "下载内容: 环境脚本与数据库 SQL；MySQL/Redis 将在线安装（不含服务端）"
 curl --progress-bar --fail --location --retry 3 --connect-timeout 10 -o "$ARCHIVE_FILE" "$ARCHIVE_URL"
 
+# 完整性校验（发布侧用 pack-release.sh 生成 .sha256）
+SHA_URL="${ARCHIVE_URL}.sha256"
+SHA_FILE="/tmp/huanjing-env.tar.gz.sha256"
+if curl -fsSL --retry 2 --connect-timeout 10 -o "$SHA_FILE" "$SHA_URL" 2>/dev/null; then
+    EXPECTED=$(awk '{print $1}' "$SHA_FILE" | head -1)
+    ACTUAL=$(sha256sum "$ARCHIVE_FILE" | awk '{print $1}')
+    if [ "$EXPECTED" != "$ACTUAL" ]; then
+        rm -f "$ARCHIVE_FILE" "$SHA_FILE"
+        err "压缩包 SHA256 校验失败（传输损坏或被篡改），请重试"
+        exit 1
+    fi
+    ok "SHA256 校验通过: ${ACTUAL:0:16}..."
+else
+    warn "未找到 .sha256 校验文件，跳过完整性校验"
+fi
+rm -f "$SHA_FILE"
+
 if ! tar -tzf "$ARCHIVE_FILE" >/dev/null 2>&1; then
     rm -f "$ARCHIVE_FILE"
     err "环境压缩包无效"

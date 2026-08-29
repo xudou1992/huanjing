@@ -83,6 +83,8 @@ if [ -n "$GH_TOKEN" ]; then
 else
     git clone --depth 1 --filter=blob:none --sparse --branch "$BRANCH" --progress "$REPO_URL" "$INSTALL_DIR"
 fi
+CLONED_SHA=$(git -C "$INSTALL_DIR" rev-parse --short HEAD 2>/dev/null || true)
+[ -n "$CLONED_SHA" ] && info "环境文件版本: ${YELLOW}$BRANCH@$CLONED_SHA${NC}（反馈问题时请附上）"
 cd "$INSTALL_DIR"
 if ! git sparse-checkout set --no-cone /install.sh /config.sh /menu.sh /netinstall.sh /README.md /mysql-packages/; then
     err "当前 Git 版本不支持稀疏检出，已停止，避免下载服务端目录"

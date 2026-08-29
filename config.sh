@@ -207,7 +207,11 @@ fi
 
 if [ -n "$NEW_IP" ] && [ -f "$CFG/ServerInfo.ini" ]; then
     NEW_IP_ENV="$NEW_IP" perl -i -pe 's/^(\s*IP0=)192\.168\.[0-9.]+/${1}$ENV{NEW_IP_ENV}/' "$CFG/ServerInfo.ini"
-    ok "外网IP已写入 ServerInfo.ini: $NEW_IP"
+    if grep -qa "^IP0=$NEW_IP" "$CFG/ServerInfo.ini" >/dev/null 2>&1; then
+        ok "外网IP已写入 ServerInfo.ini: $NEW_IP"
+    else
+        warn "ServerInfo.ini 中未发现 192.168.* 占位的 IP0=，IP 未被替换 —— 请手动检查 $(grep -a '^IP0=' "$CFG/ServerInfo.ini" | head -1)"
+    fi
     echo "[IP] ServerInfo.ini IP0=$NEW_IP" >> "$CHANGE_LOG"
 fi
 

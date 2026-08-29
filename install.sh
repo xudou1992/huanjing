@@ -26,7 +26,6 @@ STEP_NO=0
 CURRENT_STEP="初始化"
 NONINTERACTIVE=0
 T_START=$SECONDS
-: > "$LOG_FILE"
 
 # ---------------------------- 输出助手 --------------------------------------
 info()    { echo -e "  ${BLUE}ℹ${NC} $1"; }
@@ -118,10 +117,10 @@ do_stop() {
     local sd
     sd=$(find_server_dir) || { err "未找到服务端目录"; exit 1; }
     echo -e "${CYAN}${BOLD}■ 关闭服务端: $sd${NC}"
-    info "安全停服中（等待各进程退出并自动打包日志，可能需要几十秒）..."
+    info "安全停服中（等待各进程退出，可能需要几十秒）..."
     sh "$sd/stop.sh"
     echo ""
-    ok "服务端已全部关闭，日志已归档到 $sd/logbak/"
+    ok "服务端已全部关闭"
 }
 
 do_status() {
@@ -159,9 +158,19 @@ do_backup() {
     fi
     local backup_dir=/root/tlbb_backup
     mkdir -p "$backup_dir"
+    # 动态枚举游戏库（tlbbdb_main / tlbbdb_10 / tlbbdb_world ... 均覆盖）+ web
+    local db_list
+    db_list=$(mysql --defaults-file=/root/.my.cnf -N -e "SHOW DATABASES;" 2>>"$LOG_FILE" |
+        grep -E '^(tlbbdb_[A-Za-z0-9_]*|web)$' | tr '\n' ' ')
+    if [ -z "$db_list" ]; then
+        err "未发现任何游戏数据库（tlbbdb_* / web）"
+        exit 1
+    fi
     local f="$backup_dir/tlbbdb_$(date +%Y%m%d_%H%M%S).tar.gz"
-    info "正在导出 tlbbdb_main / tlbbdb_world / web（大库可能需要几分钟）..."
-    mysqldump --defaults-file=/root/.my.cnf --single-transaction --databases tlbbdb_main tlbbdb_world web 2>>"$LOG_FILE" | gzip > "$f"
+    info "正在导出: $db_list（含存储过程/触发器/事件，大库可能需要几分钟）..."
+    mysqldump --defaults-file=/root/.my.cnf --single-transaction \
+        --routines --triggers --events \
+        --databases $db_list 2>>"$LOG_FILE" | gzip > "$f"
     ok "备份完成: $f ($(du -h "$f" | cut -f1))"
     ls -1t "$backup_dir"/tlbbdb_*.tar.gz 2>/dev/null | tail -n +6 | xargs -r rm -f
     info "自动保留最近 5 份备份（目录: $backup_dir）"
@@ -175,8 +184,8 @@ do_autostart() {
             cat > /etc/systemd/system/tlbb.service <<EOF
 [Unit]
 Description=TLBB Game Server
-After=network.target mysqld.service redis.service
-Requires=mysqld.service redis.service
+After=network-online.target mysqld.service mariadb.service redis.service redis-server.service
+Wants=mysqld.service mariadb.service redis.service redis-server.service
 
 [Service]
 Type=oneshot
@@ -185,6 +194,7 @@ WorkingDirectory=$sd
 ExecStart=/bin/sh $sd/run.sh
 ExecStop=/bin/sh $sd/stop.sh
 TimeoutStartSec=300
+TimeoutStopSec=180
 
 [Install]
 WantedBy=multi-user.target
@@ -210,6 +220,210 @@ EOF
     esac
 }
 
+# ---------------------------- 远程数据库开关 ----------------------------------
+do_remote_db() {
+    local mode="${1:-}" pw
+    [ -f /root/.my.cnf ] || { err "未找到 /root/.my.cnf，请先完成环境安装"; exit 1; }
+    pw=$(sed -n 's/^password[[:space:]]*=[[:space:]]*//p' /root/.my.cnf | head -1)
+    local mycnf=/etc/my.cnf
+    case "$mode" in
+        on)
+            if grep -q '^bind-address' "$mycnf"; then
+                sed -i 's/^bind-address.*/bind-address = 0.0.0.0/' "$mycnf"
+            else
+                printf '\n[mysqld]\nbind-address = 0.0.0.0\n' >> "$mycnf"
+            fi
+            systemctl restart mysqld 2>/dev/null || systemctl restart mariadb 2>/dev/null || true
+            mysql --defaults-file=/root/.my.cnf >>"$LOG_FILE" 2>&1 <<EOF || { err "数据库用户配置失败，详见 $LOG_FILE"; exit 1; }
+CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED WITH mysql_native_password BY '$pw';
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+EOF
+            ok "数据库远程访问已开启（0.0.0.0:3306，root@%）"
+            warn "3306 已对公网开放：请确认云安全组仅对授权 IP 放行 3306"
+            ;;
+        off)
+            if grep -q '^bind-address' "$mycnf"; then
+                sed -i 's/^bind-address.*/bind-address = 127.0.0.1/' "$mycnf"
+            fi
+            mysql --defaults-file=/root/.my.cnf >>"$LOG_FILE" 2>&1 -e "DROP USER IF EXISTS 'root'@'%'; FLUSH PRIVILEGES;" || true
+            systemctl restart mysqld 2>/dev/null || systemctl restart mariadb 2>/dev/null || true
+            ok "数据库远程访问已关闭（仅 127.0.0.1，root@% 已移除）"
+            ;;
+        *)
+            local bind hasroot
+            bind=$(grep -oE '^bind-address[[:space:]]*=.*' "$mycnf" 2>/dev/null | head -1 | awk '{print $NF}')
+            bind="${bind:-127.0.0.1(默认)}"
+            hasroot=$(mysql --defaults-file=/root/.my.cnf -N -e "SELECT COUNT(*) FROM mysql.user WHERE user='root' AND host='%';" 2>/dev/null)
+            if [ "${hasroot:-0}" -gt 0 ]; then
+                info "远程访问: ${YELLOW}已开启${NC}（bind=$bind，存在 root@%）"
+            else
+                info "远程访问: ${GREEN}已关闭${NC}（bind=$bind，无 root@%）"
+            fi
+            info "开启: tlbb remote-db on / 关闭: tlbb remote-db off"
+            ;;
+    esac
+}
+
+# ---------------------------- 环境体检 doctor --------------------------------
+doctor_fix_definers() {
+    local db bad
+    while read -r db; do
+        [ -n "$db" ] || continue
+        bad=$(mysql --defaults-file=/root/.my.cnf -N -e \
+            "SELECT COUNT(*) FROM information_schema.routines WHERE routine_schema='$db' AND definer NOT IN (SELECT CONCAT(user,'@',host) FROM mysql.user);" 2>/dev/null)
+        [ "${bad:-0}" -eq 0 ] && continue
+        local tmp="/tmp/huanjing-definer-$db.sql"
+        mysqldump --defaults-file=/root/.my.cnf --routines --no-data --no-create-info \
+            --skip-triggers "$db" 2>>"$LOG_FILE" |
+            sed 's/DEFINER=`[^`]*`@`[^`]*`/DEFINER=`root`@`localhost`/g' > "$tmp"
+        mysql --defaults-file=/root/.my.cnf "$db" < "$tmp" 2>>"$LOG_FILE" || { err "重建 $db 存储过程失败"; return 1; }
+        rm -f "$tmp"
+        ok "$db 的存储过程 DEFINER 已重建为 root@localhost（$bad 个引用了不存在的用户）"
+    done < <(mysql --defaults-file=/root/.my.cnf -N -e \
+        "SELECT DISTINCT routine_schema FROM information_schema.routines WHERE routine_schema LIKE 'tlbbdb%';" 2>/dev/null)
+}
+
+doctor_check_odbc() {
+    local fix="$1" dsn user pass
+    [ -f /etc/odbc.ini ] || { err "未找到 /etc/odbc.ini"; return 1; }
+    while IFS= read -r dsn; do
+        dsn=${dsn#\[}; dsn=${dsn%\]}
+        case "$dsn" in ""|" "*|ODBC*) continue ;; esac
+        user=$(awk -v sec="[$dsn]" '$0==sec{f=1;next} /^\[/{f=0} f && tolower($1)=="user"{print $3; exit}' /etc/odbc.ini)
+        pass=$(awk -v sec="[$dsn]" '$0==sec{f=1;next} /^\[/{f=0} f && tolower($1)=="password"{sub(/^[^=]*=[[:space:]]*/,""); print; exit}' /etc/odbc.ini)
+        # DSN 未内嵌账号时回退到 /root/.my.cnf 的 root 凭据
+        [ -n "$user" ] || user=root
+        if [ -z "$pass" ] && [ -f /root/.my.cnf ]; then
+            pass=$(sed -n 's/^password[[:space:]]*=[[:space:]]*//p' /root/.my.cnf | head -1)
+        fi
+        if ! printf 'select 1\n' | isql -v "$dsn" "$user" "$pass" >/dev/null 2>&1; then
+            err "ODBC 数据源 $dsn 无法连接（isql 失败）"
+            continue
+        fi
+        ok "ODBC 数据源 $dsn 连接正常"
+    done < <(grep -E '^\[' /etc/odbc.ini | tr -d '[]')
+    # 字符集一致性：连接字符集 vs 角色表字符集（latin1 表 + utf8 连接 = GBK 角色名写入失败）
+    tbl_coll=$(mysql --defaults-file=/root/.my.cnf -N -e \
+        "SELECT TABLE_COLLATION FROM information_schema.TABLES WHERE TABLE_SCHEMA='tlbbdb_main' AND TABLE_NAME='t_char';" 2>/dev/null)
+    case "$tbl_coll" in
+        latin1*)
+            local _user _pass
+            _user=$(awk '/^\[tlbbdb_main\]/{f=1;next} /^\[/{f=0} f && tolower($1)=="user"{print $3; exit}' /etc/odbc.ini)
+            _pass=$(awk '/^\[tlbbdb_main\]/{f=1;next} /^\[/{f=0} f && tolower($1)=="password"{sub(/^[^=]*=[[:space:]]*/,""); print}' /etc/odbc.ini)
+            [ -n "$_user" ] || _user=root
+            [ -n "$_pass" ] || _pass=$(sed -n 's/^password[[:space:]]*=[[:space:]]*//p' /root/.my.cnf | head -1)
+            conn_charset=$(printf "select @@character_set_client;\n" | isql -v tlbbdb_main "$_user" "$_pass" 2>/dev/null |
+                grep 'character_set_client' | tail -1 | awk -F'|' '{gsub(/[[:space:]]/,"",$3); print $3}')
+            if [ -n "$conn_charset" ] && [ "$conn_charset" != "latin1" ]; then
+                warn "连接字符集为 $conn_charset，而 t_char 是 latin1 —— GBK 角色名将写入失败（症状: 建角色内部错误559）"
+                if [ "$1" = "--fix" ] && ! grep -qi '^Charset' /etc/odbc.ini; then
+                    sed -i 's/^\[tlbbdb_main\]/[tlbbdb_main]\nCharset=latin1/; s/^\[tlbbdb_10\]/[tlbbdb_10]\nCharset=latin1/; s/^\[tlbbdb_world\]/[tlbbdb_world]\nCharset=latin1/' /etc/odbc.ini
+                    ok "已在 /etc/odbc.ini 各数据源补写 Charset=latin1（对新建连接生效）"
+                else
+                    info "修复方法: 在 /etc/odbc.ini 各数据源加 Charset=latin1 后重启服务端，或执行 tlbb doctor --fix"
+                fi
+            else
+                ok "ODBC 字符集与表字符集一致（latin1）"
+            fi
+            ;;
+    esac
+}
+
+do_doctor() {
+    local fix="${1:-}"
+    echo -e "${CYAN}${BOLD}▶ 环境体检${NC}"
+    [ "$(id -u)" -eq 0 ] || { err "请使用 root 用户运行"; exit 1; }
+
+    # 1. 数据库连通
+    if [ ! -f /root/.my.cnf ]; then
+        err "未找到 /root/.my.cnf（环境未安装或被清理）"
+    elif mysql --defaults-file=/root/.my.cnf -e 'SELECT 1;' >/dev/null 2>&1; then
+        ok "MySQL 本地连接正常"
+    else
+        err "MySQL 无法连接（/root/.my.cnf 凭据失效？）"
+    fi
+
+    # 2. 存储过程 DEFINER
+    local bad
+    bad=$(mysql --defaults-file=/root/.my.cnf -N -e \
+        "SELECT COUNT(*) FROM information_schema.routines r WHERE r.routine_schema LIKE 'tlbbdb%' AND NOT EXISTS (SELECT 1 FROM mysql.user u WHERE CONCAT(u.user,'@',u.host)=r.definer);" 2>/dev/null)
+    if [ "${bad:-0}" -gt 0 ]; then
+        err "$bad 个存储过程/函数的 DEFINER 用户不存在 —— 症状: 建角色/存档报内部错误"
+        mysql --defaults-file=/root/.my.cnf -e \
+            "SELECT routine_schema,routine_type,routine_name,definer FROM information_schema.routines r WHERE r.routine_schema LIKE 'tlbbdb%' AND NOT EXISTS (SELECT 1 FROM mysql.user u WHERE CONCAT(u.user,'@',u.host)=r.definer) LIMIT 10;" 2>/dev/null
+        if [ "$fix" = "--fix" ]; then doctor_fix_definers; else info "自动修复: tlbb doctor --fix"; fi
+    else
+        ok "存储过程 DEFINER 全部有效"
+    fi
+
+    # 3. 关键表存在性
+    local db miss
+    while read -r db; do
+        [ -n "$db" ] || continue
+        miss=$(mysql --defaults-file=/root/.my.cnf -N -e \
+            "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='$db' AND TABLE_NAME IN ('t_char','t_charextra');" 2>/dev/null)
+        if [ "${miss:-0}" -ge 2 ]; then
+            ok "$db 关键角色表齐全"
+        else
+            warn "$db 缺少 t_char / t_charextra（SQL 未导入完整？）"
+        fi
+    done < <(mysql --defaults-file=/root/.my.cnf -N -e "SHOW DATABASES;" 2>/dev/null | grep -E '^tlbbdb_')
+
+    # 4. ODBC 连通 + 字符集
+    if command -v isql >/dev/null 2>&1; then
+        doctor_check_odbc "$fix"
+    else
+        warn "未安装 unixODBC（isql 不可用），跳过 ODBC 检查"
+    fi
+
+    # 5. billing
+    local sd bill_port
+    if sd=$(find_server_dir) && [ -f "$sd/Server/Config/ServerInfo.ini" ]; then
+        # 文件中首个 Port0= 属于 [Billing] 段（其后才是 [Server0]/[Server1] 的监听端口）
+        bill_port=$(grep -aE '^Port0=' "$sd/Server/Config/ServerInfo.ini" | head -1 | cut -d= -f2 | tr -d '\r')
+        [ -n "$bill_port" ] || bill_port=11100
+        if ss -lnt 2>/dev/null | grep -qE "[:.]$bill_port([[:space:]]|$)"; then
+            ok "billing 正在监听 $bill_port"
+        else
+            warn "billing 未监听 $bill_port（登录将报 108）—— 检查 billing 服务是否启动"
+        fi
+    fi
+
+    # 6. Redis
+    local redis_pw redis_ok
+    if sd=$(find_server_dir); then
+        redis_pw=$(awk 'BEGIN{IGNORECASE=0} /^\[Redis\]/{f=1;next} /^\[/{f=0} f && /^Password=/{sub(/^Password=[[:space:]]*/,""); print; exit}' "$sd/Server/Config/ServerInfo.ini" 2>/dev/null | tr -d '\r')
+        if [ -n "$redis_pw" ]; then
+            redis_ok=$(redis-cli -a "$redis_pw" --no-auth-warning ping 2>/dev/null)
+            [ "$redis_ok" = "PONG" ] && ok "Redis 连接正常（服务端配置的密码有效）" || warn "Redis 用服务端配置的密码无法连通（密码不一致或服务未启动）"
+        fi
+    fi
+
+    # 7. 进程
+    if sd=$(find_server_dir); then
+        do_status >/dev/null 2>&1
+    fi
+
+    echo ""
+    ok "体检完成（修复项执行: tlbb doctor --fix）"
+}
+
+# ---------------------------- 服务端日志落盘 ----------------------------------
+do_logfix() {
+    local sd logdir
+    sd=$(find_server_dir) || { err "未找到服务端目录"; exit 1; }
+    logdir="$sd/log"
+    mkdir -p "$logdir"
+    cp "$sd/run.sh" "$sd/run.sh.bak-$(date +%Y%m%d%H%M%S)"
+    # ./Xxx1 >/dev/null 2>&1 &  →  ./Xxx1 >>log/Xxx1.log 2>&1 &
+    SRV_DIR="$sd" perl -i -pe '
+        s{(\./([A-Za-z0-9_]+))\s*>/dev/null\s+2>&1(\s*&\s*)$}{$1 >> $ENV{SRV_DIR}/log/$2.log 2>&1$3}g;
+    ' "$sd/run.sh"
+    ok "run.sh 已改为按组件落盘日志（$logdir/组件名.log），原脚本已备份"
+    info "生效需重启服务端: tlbb restart"
+}
+
 do_help() {
     cat <<'EOF'
 TLBB 管理命令：
@@ -220,8 +434,11 @@ TLBB 管理命令：
   tlbb start      启动服务端
   tlbb stop       停止服务端
   tlbb status     查看服务端进程状态
-  tlbb backup     备份数据库
+  tlbb backup     备份数据库（含存储过程/触发器）
   tlbb autostart on|off
+  tlbb remote-db on|off   开启/关闭数据库远程访问（默认关闭，仅本地）
+  tlbb doctor [--fix]     环境体检：存储过程DEFINER/ODBC字符集/连通性等（--fix 自动修复常见项）
+  tlbb logfix             把服务端 run.sh 的黑洞日志改为按组件落盘，便于排障
 EOF
 }
 
@@ -236,8 +453,14 @@ case "${1:-}" in
     backup)    do_backup;    exit 0 ;;
     config)    shift; exec "$SCRIPT_DIR/config.sh" "$@" ;;
     autostart) do_autostart "${2:-}"; exit 0 ;;
+    remote-db) do_remote_db "${2:-}"; exit 0 ;;
+    doctor)    do_doctor "${2:-}"; exit 0 ;;
+    logfix)    do_logfix;    exit 0 ;;
     help|-h|--help) do_help; exit 0 ;;
 esac
+
+# 管理子命令不应清空安装日志；仅安装流程从头记录
+: > "$LOG_FILE"
 
 # 系统识别：通杀 RHEL 系（CentOS 7/8/9、AlmaLinux、Rocky、腾讯OS、阿里云Linux 等）
 OS_ID=$(sed -n 's/^ID=//p' /etc/os-release 2>/dev/null | head -1 | tr -d '"')
@@ -284,6 +507,10 @@ if [ "$1" != "uninstall" ] && [ "$1" != "-u" ]; then
         fi
         read -p "  继续安装可能造成冲突，仍要继续吗？(y/N): " GO_ON
         [[ $GO_ON =~ [Yy] ]] || { info "已退出，建议先执行 ./install.sh uninstall"; exit 0; }
+    fi
+    if systemctl list-unit-files 2>/dev/null | grep -q "^mariadb" && systemctl is-active --quiet mariadb 2>/dev/null; then
+        warn "检测到正在运行的 MariaDB（与 huanjing 安装的 MySQL 并存会引起字符集/ODBC 驱动差异）"
+        info "建议: 备份数据后执行 ./install.sh uninstall，或明确知道自己在做什么再继续"
     fi
 
     AVAIL_KB=$(df -Pk / | awk 'NR==2 {print $4}')
@@ -655,17 +882,15 @@ info "临时密码: ${YELLOW}$TEMP_PASSWORD${NC}"
 
 # 步骤 7/13：用户权限
 step_begin "配置 MySQL 用户权限"
-mysql --connect-expired-password -uroot -p"$TEMP_PASSWORD" >>"$LOG_FILE" 2>&1 <<EOF || fail "配置 root 密码与远程权限"
+mysql --connect-expired-password -uroot -p"$TEMP_PASSWORD" >>"$LOG_FILE" 2>&1 <<EOF || fail "配置 root 密码与权限"
 ALTER USER 'root'@'localhost' IDENTIFIED BY '$TEMP_PASSWORD';
 FLUSH PRIVILEGES;
 SET GLOBAL validate_password.policy = 0;
 SET GLOBAL validate_password.length = 4;
 ALTER USER 'root'@'localhost' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
-CREATE USER 'root'@'%' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';
-GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
 FLUSH PRIVILEGES;
 EOF
-ok "root 密码与远程权限（root@%）配置完成"
+ok "root 密码配置完成（默认仅本地访问；远程: tlbb remote-db on）"
 
 cat > /root/.my.cnf <<EOF
 [client]
@@ -677,7 +902,6 @@ chmod 600 /root/.my.cnf
 ok "已创建 /root/.my.cnf 免密登录配置"
 
 mysql --defaults-file=/root/.my.cnf >>"$LOG_FILE" 2>&1 <<EOF || fail "切换认证插件"
-ALTER USER 'root'@'%' IDENTIFIED WITH mysql_native_password BY '$MYSQL_ROOT_PASSWORD';
 ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '$MYSQL_ROOT_PASSWORD';
 FLUSH PRIVILEGES;
 EOF
@@ -714,16 +938,22 @@ ok "SSL 证书生成完成"
 
 # 步骤 9/13：MySQL SSL 配置
 step_begin "配置 MySQL SSL"
-cat >> /etc/my.cnf <<EOF
+# 只在缺失时追加，保证脚本幂等（重跑不会重复追加 [mysqld] 段）
+if ! grep -q '^ssl-ca' /etc/my.cnf 2>/dev/null; then
+    cat >> /etc/my.cnf <<EOF
 
 [mysqld]
 ssl-ca = $OPENSSL_DIR/ca.pem
 ssl-cert = $OPENSSL_DIR/server-cert.pem
 ssl-key = $OPENSSL_DIR/server-key.pem
-bind-address = 0.0.0.0
+bind-address = 127.0.0.1
 port = 3306
 EOF
-ok "SSL 与 MySQL 远程监听已写入 /etc/my.cnf（0.0.0.0:3306）"
+    ok "SSL 已写入 /etc/my.cnf（默认仅监听 127.0.0.1:3306）"
+else
+    ok "MySQL SSL 配置已存在，跳过（保持幂等）"
+fi
+info "需要数据库远程访问时执行: ${YELLOW}tlbb remote-db on${NC}"
 
 # 步骤 10/13：导入数据库
 step_begin "导入数据库"
@@ -748,6 +978,8 @@ step_begin "配置 ODBC 数据源"
 ODBC_DRIVER=$(ls /usr/lib64/libmyodbc8a.so 2>/dev/null || ls /usr/lib64/libmyodbc*.so 2>/dev/null | head -1 || echo "/usr/lib64/libmyodbc8a.so")
 info "ODBC 驱动: $ODBC_DRIVER"
 cat > /etc/odbc.ini <<EOF
+# CHARSET 与库表字符集保持一致（huanjing 内置 SQL 为 latin1），
+# 游戏端以 GBK 原始字节写入，缺省的 utf8mb4 连接会导致中文写入静默失败。
 [tlbbdb_main]
 Driver          = $ODBC_DRIVER
 SERVER          = 127.0.0.1
@@ -755,6 +987,7 @@ PORT            = 3306
 USER            = root
 Password        = $MYSQL_ROOT_PASSWORD
 Database        = tlbbdb_main
+CHARSET         = latin1
 OPTION          = 3
 SOCKET          =
 
@@ -765,6 +998,7 @@ PORT            = 3306
 USER            = root
 Password        = $MYSQL_ROOT_PASSWORD
 Database        = tlbbdb_world
+CHARSET         = latin1
 OPTION          = 3
 SOCKET          =
 
@@ -775,10 +1009,11 @@ PORT            = 3306
 USER            = root
 Password        = $MYSQL_ROOT_PASSWORD
 Database        = web
+CHARSET         = latin1
 OPTION          = 3
 SOCKET          =
 EOF
-ok "三个 ODBC 数据源已写入 /etc/odbc.ini"
+ok "三个 ODBC 数据源已写入 /etc/odbc.ini（CHARSET=latin1 与库表一致）"
 
 # 步骤 12/13：Redis
 step_begin "安装配置 Redis"
@@ -849,8 +1084,8 @@ echo -e "  ${BOLD}🎉 安装成功完成！${NC}${GREEN}   总耗时: $T_FMT"
 echo  "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo -e "${NC}"
 echo -e "  ${GREEN}✔${NC} MySQL 版本     ${YELLOW}${MYSQL_VER}${NC}（systemctl 管理，开机自启）"
-echo -e "  ${GREEN}✔${NC} 数据库         ${YELLOW}tlbbdb_main / tlbbdb_world / web${NC}"
-echo -e "  ${GREEN}✔${NC} 远程访问       root@% 已开启，插件 mysql_native_password"
+echo -e "  ${GREEN}✔${NC} 数据库         ${YELLOW}tlbbdb_main / tlbbdb_10 / tlbbdb_world / web${NC}（按实际导入）"
+echo -e "  ${GREEN}✔${NC} 远程访问       ${YELLOW}默认关闭${NC}（仅 127.0.0.1；需要时: tlbb remote-db on）"
 echo -e "  ${GREEN}✔${NC} ODBC 数据源    ${YELLOW}/etc/odbc.ini${NC}"
 echo -e "  ${GREEN}✔${NC} Redis 服务     ${YELLOW}${REDIS_VER}${NC}（端口 6379，独立密码）"
 echo -e "  ${GREEN}✔${NC} SSL 证书       ${YELLOW}/etc/mysql/ssl/${NC}"
